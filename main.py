@@ -2,6 +2,7 @@ import httpx
 import re
 import random
 import json
+from pathlib import Path
 from .image_processor import prepare_audit_images
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -87,9 +88,14 @@ class ImageGuard(Star):
         try:
             # [Fix] 优先使用独立配置的 LLM
             max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
+            keep_compressed_image_in_temp = bool(
+                self.config.get("keep_compressed_image_in_temp", False)
+            )
             audit_image_urls = await prepare_audit_images(
                 image_urls,
                 max_image_bytes,
+                keep_compressed_image_in_temp=keep_compressed_image_in_temp,
+                compressed_image_temp_dir=Path("data") / "temp" / "astrbot_plugin_image_guard",
                 log_compression_result=logger.info,
             )
             response_text = await self._call_audit_llm(prompt, audit_image_urls)

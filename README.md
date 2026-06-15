@@ -61,6 +61,7 @@
 | **llm_max_tokens** | **输出上限**：大模型单次审核输出的最大 token 数。本地 reasoning 模型容易先输出思考过程，建议调大避免截断最终结论。 | `512` |
 | **llm_timeout_seconds** | **请求超时**：大模型接口请求超时时间。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。 | `120.0` |
 | **compressed_image_max_bytes** | **图片压缩上限**：发送给大模型审核前会把图片压缩到该字节数以内，默认 1MB。 | `1048576` |
+| **keep_compressed_image_in_temp** | **保留压缩图**：开启后会把压缩后的送审 JPEG 保存到 AstrBot 的 `data/temp/astrbot_plugin_image_guard` 子目录，并在日志中输出文件路径，便于调试压缩质量。 | `false` |
 | **debug_log_llm_response** | **调试日志**：是否将大模型返回的原始内容输出到日志。可能包含审核理由或图片相关敏感信息，默认关闭。 | `false` |
 | **group_scope** | 开启审查的群号。填 `["0"]` 代表所有群。 | `["0"]` |
 | **report_target_id** | 接收战报的管理员 QQ 号 (纯数字)。 | 你的QQ号 |

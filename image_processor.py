@@ -1,8 +1,11 @@
 import base64
 import io
 import math
+from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
+from hashlib import blake2s
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -42,6 +45,7 @@ class ImageCompressionResult:
     compressed_height: int
     quality: int
     max_data_url_bytes: int
+    saved_path: str | None
 
 
 def compress_image_to_data_url(image_bytes: bytes, max_bytes: int) -> str:
@@ -66,12 +70,15 @@ def compress_image_with_result(image_bytes: bytes, max_bytes: int) -> ImageCompr
         compressed_height=compressed.height,
         quality=compressed.quality,
         max_data_url_bytes=max_bytes,
+        saved_path=None,
     )
 
 
 async def prepare_audit_images(
     image_urls: list[str],
     max_bytes: int,
+    keep_compressed_image_in_temp: bool = False,
+    compressed_image_temp_dir: Path | None = None,
     log_compression_result: CompressionLogWriter | None = None,
 ) -> list[str]:
     prepared_urls = []
@@ -93,6 +100,12 @@ async def prepare_audit_images(
             response = await client.get(image_url)
             response.raise_for_status()
             compression_result = compress_image_with_result(response.content, max_bytes)
+            if keep_compressed_image_in_temp:
+                compression_result = _save_compressed_image_to_temp(
+                    compression_result,
+                    image_url,
+                    _resolve_compressed_image_temp_dir(compressed_image_temp_dir),
+                )
             prepared_urls.append(compression_result.data_url)
             if log_compression_result:
                 log_compression_result(
@@ -100,6 +113,39 @@ async def prepare_audit_images(
                 )
 
     return prepared_urls
+
+
+def _save_compressed_image_to_temp(
+    compression_result: ImageCompressionResult,
+    image_url: str,
+    temp_dir: Path,
+) -> ImageCompressionResult:
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    digest = blake2s(image_url.encode("utf-8"), digest_size=4).hexdigest()
+    file_path = temp_dir / f"image_guard_{timestamp}_{digest}.jpg"
+    file_path.write_bytes(base64.b64decode(compression_result.data_url.split(",", 1)[1]))
+
+    return ImageCompressionResult(
+        data_url=compression_result.data_url,
+        original_bytes=compression_result.original_bytes,
+        jpeg_bytes=compression_result.jpeg_bytes,
+        data_url_bytes=compression_result.data_url_bytes,
+        original_width=compression_result.original_width,
+        original_height=compression_result.original_height,
+        compressed_width=compression_result.compressed_width,
+        compressed_height=compression_result.compressed_height,
+        quality=compression_result.quality,
+        max_data_url_bytes=compression_result.max_data_url_bytes,
+        saved_path=str(file_path),
+    )
+
+
+def _resolve_compressed_image_temp_dir(compressed_image_temp_dir: Path | None) -> Path:
+    if compressed_image_temp_dir:
+        return compressed_image_temp_dir
+    return Path("data") / "temp" / "astrbot_plugin_image_guard"
 
 
 def _compress_jpeg(image: PillowImage.Image, max_bytes: int) -> JpegCompressionResult:
@@ -160,6 +206,7 @@ def _format_compression_result(
     result: ImageCompressionResult,
 ) -> str:
     status = "达标" if result.data_url_bytes <= result.max_data_url_bytes else "超限"
+    saved_path_text = f"，保留文件={result.saved_path}" if result.saved_path else ""
     return (
         "[ImageGuard] 图片压缩结果: "
         f"第 {image_index}/{total_images} 张，"
@@ -171,6 +218,7 @@ def _format_compression_result(
         f"上限={_format_bytes(result.max_data_url_bytes)}，"
         f"处理后占原图={_format_percent(result.data_url_bytes, result.original_bytes)}，"
         f"状态={status}"
+        f"{saved_path_text}"
     )
 
 

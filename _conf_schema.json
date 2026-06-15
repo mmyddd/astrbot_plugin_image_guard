@@ -151,6 +151,11 @@
     "type": "int",
     "default": 1048576
   },
+  "keep_compressed_image_in_temp": {
+    "description": "调试开关。开启后会把每张压缩后的送审 JPEG 保留到 AstrBot 的 data/temp/astrbot_plugin_image_guard 子目录，并在压缩结果日志中输出文件路径。",
+    "type": "bool",
+    "default": false
+  },
   "debug_log_llm_response": {
     "description": "调试开关。开启后会将大模型返回的原始内容输出到日志，可能包含审核理由或图片相关敏感信息。",
     "type": "bool",
