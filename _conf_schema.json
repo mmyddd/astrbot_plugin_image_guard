@@ -1,72 +1,197 @@
 {
   "group_scope": {
-    "description": "启用审核的群号列表。包含 0 表示所有群，留空表示不审核群聊。",
+    "description": "启用审查的群号列表。若包含 \"0\" 则监听所有群。若留空则不启用。",
     "type": "list",
     "default": ["0"],
     "items": { "type": "string" }
   },
   "private_scope": {
-    "description": "启用审核的私聊用户 ID 列表。包含 0 表示所有私聊，留空表示不审核私聊。",
+    "description": "启用审查的私聊用户(QQ)列表。若包含 \"0\" 则监听所有私聊。若留空则不启用。",
     "type": "list",
     "default": [],
     "items": { "type": "string" }
   },
-  "audit_provider_id": {
-    "description": "图片审核使用的视觉模型提供商 ID。留空时使用当前会话默认聊天提供商。",
-    "type": "string",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "custom_vision_prompt": {
-    "description": "额外审核要求。建议写清楚必须命中的具体画面或文字，避免宽泛描述。",
+  "llm_model": {
+    "description": "API1 模型名（优先使用）",
     "type": "string",
     "default": ""
   },
+  "llm_base_url": {
+    "description": "API1 URL（优先使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key": {
+    "description": "API1 KEY（优先使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_2": {
+    "description": "API2 模型名（API1失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_2": {
+    "description": "API2 URL（API1失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_2": {
+    "description": "API2 KEY（API1失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_3": {
+    "description": "API3 模型名（API2失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_3": {
+    "description": "API3 URL（API2失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_3": {
+    "description": "API3 KEY（API2失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_4": {
+    "description": "API4 模型名（API3失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_4": {
+    "description": "API4 URL（API3失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_4": {
+    "description": "API4 KEY（API3失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_5": {
+    "description": "API5 模型名（API4失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_5": {
+    "description": "API5 URL（API4失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_5": {
+    "description": "API5 KEY（API4失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_6": {
+    "description": "API6 模型名（API5失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_6": {
+    "description": "API6 URL（API5失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_6": {
+    "description": "API6 KEY（API5失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_7": {
+    "description": "API7 模型名（API6失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_7": {
+    "description": "API7 URL（API6失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_7": {
+    "description": "API7 KEY（API6失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model_8": {
+    "description": "API8 模型名（API7失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_base_url_8": {
+    "description": "API8 URL（API7失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key_8": {
+    "description": "API8 KEY（API7失败时使用）",
+    "type": "string",
+    "default": ""
+  },
+  "custom_vision_prompt": {
+    "description": "自定义识图引导词。用于增强模型对特定内容的识别能力。会被拼接到系统提示词中。",
+    "type": "string",
+    "default": "请对图片进行像素级的细节分析。特别关注地理位置（如地图边界、所含国家）、特定文字符号、以及任何可能被隐藏的违规元素。不要只看整体，要看局部细节。"
+  },
+  "llm_max_tokens": {
+    "description": "大模型单次审核输出的最大 token 数。使用会先输出思考过程的本地模型时建议调大，避免最终 REASON/RESULT 被截断。",
+    "type": "int",
+    "default": 512
+  },
+  "llm_timeout_seconds": {
+    "description": "大模型接口请求超时时间（秒）。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。",
+    "type": "float",
+    "default": 120.0
+  },
+  "compressed_image_max_bytes": {
+    "description": "发送给大模型审核前的图片压缩上限（字节）。默认 1048576，即 1MB；原图无论多大都会压缩到该大小以内。",
+    "type": "int",
+    "default": 1048576
+  },
+  "debug_log_llm_response": {
+    "description": "调试开关。开启后会将大模型返回的原始内容输出到日志，可能包含审核理由或图片相关敏感信息。",
+    "type": "bool",
+    "default": false
+  },
   "sensitive_texts": {
-    "description": "图片中禁止出现的文字。留空则不按文字规则审核。",
+    "description": "图片中禁止出现的敏感文字列表（OCR）",
     "type": "list",
-    "default": [],
+    "default": ["违禁词A", "违禁词B"],
     "items": { "type": "string" }
   },
   "forbidden_descriptions": {
-    "description": "图片中禁止出现的画面。留空则不按画面规则审核。",
+    "description": "禁止出现的图片画面描述（语义检测，如：东亚地图、涩图）",
     "type": "list",
-    "default": [],
+    "default": ["东亚地图", "裸露画面"],
     "items": { "type": "string" }
   },
-  "ignore_stickers": {
-    "description": "忽略 QQ 表情、贴图等非普通图片。",
-    "type": "bool",
-    "default": true
-  },
-  "ignore_gif": {
-    "description": "忽略 GIF 和 APNG 动图。",
-    "type": "bool",
-    "default": true
-  },
-  "max_images_per_message": {
-    "description": "单条消息最多审核的图片数量。",
-    "type": "int",
-    "default": 4
-  },
-  "check_probability": {
-    "description": "抽查概率，范围 0.0 到 1.0。",
-    "type": "float",
-    "default": 1.0
-  },
-  "enable_recall": {
-    "description": "命中违规后是否撤回群消息。",
-    "type": "bool",
-    "default": true
-  },
   "ban_duration": {
-    "description": "命中违规后的群禁言时长，单位秒。0 表示不禁言。",
+    "description": "违规禁言时长（秒），0为不禁言",
     "type": "int",
     "default": 86400
   },
   "report_target_id": {
-    "description": "违规报告接收目标。可填管理员 QQ 号；也可填 AstrBot unified_msg_origin。",
+    "description": "违规图片转发上报的目标ID（建议填 unified_msg_origin 格式，或纯数字 ID）。留空不转发。",
     "type": "string",
     "default": ""
+  },
+  "group_report_targets": {
+    "description": "群聊违规上报接收人映射。格式为 \"来源群号:private:接收人QQ\" 或 \"来源群号:group:接收群号\"。旧格式 \"来源群号:接收人QQ\" 仍按私聊处理；未匹配时回退到 report_target_id。",
+    "type": "list",
+    "default": [],
+    "items": { "type": "string" }
+  },
+  "enable_recall": {
+    "description": "是否撤回违规图片",
+    "type": "bool",
+    "default": true
+  },
+  "check_probability": {
+    "description": "抽查概率 (0.0-1.0)，1.0为每图必查",
+    "type": "float",
+    "default": 1.0
   }
 }
