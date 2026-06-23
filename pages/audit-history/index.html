@@ -52,6 +52,21 @@
   .stat-card .num { font-size: 24px; font-weight: 700; }
   .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
+  .provider-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 16px; margin-bottom: 16px;
+  }
+  .provider-section .title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
+  .provider-bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .provider-bar-wrap .name { font-size: 12px; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .provider-bar-wrap .count { font-size: 11px; color: var(--text-secondary); min-width: 36px; text-align: right; }
+  .provider-bar {
+    flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden;
+  }
+  .provider-bar-fill {
+    height: 100%; background: var(--primary); border-radius: 4px; transition: width .3s;
+  }
+
   table {
     width: 100%; border-collapse: collapse; background: var(--card);
     border-radius: var(--radius); overflow: hidden; font-size: 13px;
@@ -114,6 +129,11 @@
   <div class="stat-card"><div class="num" id="stat-banned">0</div><div class="label">已禁言</div></div>
 </div>
 
+<div class="provider-section" id="provider-section">
+  <div class="title">🤖 供应商调用统计</div>
+  <div id="provider-stats">加载中...</div>
+</div>
+
 <table>
   <thead>
     <tr>
@@ -152,8 +172,33 @@ function ready(fn) {
 }
 
 ready(async () => {
+  await loadStats();
   await loadRecords();
 });
+
+async function loadStats() {
+  try {
+    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/provider_stats');
+    const stats = res.data || {};
+    const keys = Object.keys(stats);
+    const container = document.getElementById('provider-stats');
+    if (keys.length === 0) {
+      container.innerHTML = '<span style="font-size:12px;color:var(--text-secondary);">暂无数据</span>';
+      return;
+    }
+    const maxVal = Math.max(...Object.values(stats), 1);
+    container.innerHTML = keys.map(k => {
+      const pct = (stats[k] / maxVal * 100).toFixed(0);
+      return `<div class="provider-bar-wrap">
+        <span class="name" title="${escHtml(k)}">${escHtml(k)}</span>
+        <div class="provider-bar"><div class="provider-bar-fill" style="width:${pct}%"></div></div>
+        <span class="count">${stats[k]}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('provider-stats').innerHTML = '<span style="font-size:12px;color:var(--danger);">加载失败</span>';
+  }
+}
 
 async function loadRecords() {
   const tbody = document.getElementById('tbody');

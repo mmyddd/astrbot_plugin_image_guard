@@ -35,6 +35,12 @@ class ImageGuard(Star):
             ["POST", "DELETE"],
             "删除单条审核记录",
         )
+        context.register_web_api(
+            "/image_guard/audit/provider_stats",
+            self._api_audit_provider_stats,
+            ["GET"],
+            "获取供应商调用统计",
+        )
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -162,7 +168,9 @@ class ImageGuard(Star):
         providers = self.config.get("llm_providers", [])
         if not providers:
             logger.info("[ImageGuard] 未配置任何供应商，直接使用 AstrBot Provider")
-            return await self._call_astrbot_provider(prompt, image_urls)
+            result = await self._call_astrbot_provider(prompt, image_urls)
+            await self._track_provider_usage("AstrBot Provider (fallback)")
+            return result
 
         last_exception = None
         for prov in providers:
@@ -171,7 +179,9 @@ class ImageGuard(Star):
             try:
                 if template == "astrbot_provider":
                     logger.info(f"[ImageGuard] 尝试 AstrBot Provider「{prov_name}」...")
-                    return await self._call_astrbot_provider(prompt, image_urls)
+                    result = await self._call_astrbot_provider(prompt, image_urls)
+                    await self._track_provider_usage(prov_name)
+                    return result
 
                 else:
                     # 所有非 astrbot_provider 的模板（openai_compatible / modelscope 等）
@@ -181,6 +191,7 @@ class ImageGuard(Star):
                     if not result or not result.strip():
                         raise ValueError(f"「{prov_name}」返回内容为空")
                     logger.info(f"[ImageGuard] 供应商「{prov_name}」审核成功")
+                    await self._track_provider_usage(prov_name)
                     return result
 
             except Exception as e:
@@ -420,6 +431,14 @@ class ImageGuard(Star):
             records = records[-max_records:]
         await self.put_kv_data("audit_history", records)
 
+    async def _track_provider_usage(self, provider_name: str):
+        """记录供应商调用次数"""
+        stats = await self.get_kv_data("provider_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+        stats[provider_name] = stats.get(provider_name, 0) + 1
+        await self.put_kv_data("provider_stats", stats)
+
     async def _api_audit_list(self):
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
@@ -429,6 +448,12 @@ class ImageGuard(Star):
     async def _api_audit_clear(self):
         await self.put_kv_data("audit_history", [])
         return {"message": "ok"}
+
+    async def _api_audit_provider_stats(self):
+        stats = await self.get_kv_data("provider_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+        return {"data": stats}
 
     async def _api_audit_delete(self):
         from flask import request
