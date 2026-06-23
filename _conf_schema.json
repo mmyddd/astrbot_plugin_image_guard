@@ -23,125 +23,51 @@
     "default": "",
     "hint": "可选值: 留空(不启用) / low / medium / high"
   },
-  "llm_model": {
-    "description": "API1 模型名（优先使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url": {
-    "description": "API1 URL（优先使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key": {
-    "description": "API1 KEY（优先使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_2": {
-    "description": "API2 模型名（API1失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_2": {
-    "description": "API2 URL（API1失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_2": {
-    "description": "API2 KEY（API1失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_3": {
-    "description": "API3 模型名（API2失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_3": {
-    "description": "API3 URL（API2失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_3": {
-    "description": "API3 KEY（API2失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_4": {
-    "description": "API4 模型名（API3失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_4": {
-    "description": "API4 URL（API3失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_4": {
-    "description": "API4 KEY（API3失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_5": {
-    "description": "API5 模型名（API4失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_5": {
-    "description": "API5 URL（API4失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_5": {
-    "description": "API5 KEY（API4失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_6": {
-    "description": "API6 模型名（API5失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_6": {
-    "description": "API6 URL（API5失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_6": {
-    "description": "API6 KEY（API5失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_7": {
-    "description": "API7 模型名（API6失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_7": {
-    "description": "API7 URL（API6失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_7": {
-    "description": "API7 KEY（API6失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_model_8": {
-    "description": "API8 模型名（API7失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_base_url_8": {
-    "description": "API8 URL（API7失败时使用）",
-    "type": "string",
-    "default": ""
-  },
-  "llm_api_key_8": {
-    "description": "API8 KEY（API7失败时使用）",
-    "type": "string",
-    "default": ""
+  "llm_providers": {
+    "description": "LLM 供应商列表（按顺序依次尝试，第一个成功的即返回审核结果）。可在 Dashboard 中动态增删排序。",
+    "type": "template_list",
+    "default": [],
+    "templates": {
+      "openai_compatible": {
+        "name": "OpenAI 兼容",
+        "description": "适用于任何 OpenAI 格式兼容的 API（如 GPT、DeepSeek、GLM、通义千问等）",
+        "items": {
+          "name": {
+            "description": "供应商别名（仅用于日志标识和区分）",
+            "type": "string",
+            "default": "OpenAI API"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "base_url": {
+            "description": "API 地址",
+            "type": "string",
+            "default": "",
+            "hint": "例如：https://api.deepseek.com"
+          },
+          "model": {
+            "description": "模型名（留空则使用默认模型）",
+            "type": "string",
+            "default": "",
+            "hint": "例如：gpt-4o、deepseek-chat、glm-4v-plus"
+          }
+        }
+      },
+      "astrbot_provider": {
+        "name": "AstrBot 当前 Provider",
+        "description": "复用 AstrBot 当前会话配置的 LLM Provider（不需要填写 API Key 等额外信息）",
+        "items": {
+          "name": {
+            "description": "供应商别名（仅用于日志标识）",
+            "type": "string",
+            "default": "AstrBot Provider"
+          }
+        }
+      }
+    }
   },
   "custom_vision_prompt": {
     "description": "自定义识图引导词。用于增强模型对特定内容的识别能力。会被拼接到系统提示词中。",
@@ -149,12 +75,12 @@
     "default": "请对图片进行像素级的细节分析。特别关注地理位置（如地图边界、所含国家）、特定文字符号、以及任何可能被隐藏的违规元素。不要只看整体，要看局部细节。"
   },
   "llm_max_tokens": {
-    "description": "大模型单次审核输出的最大 token 数。使用会先输出思考过程的本地模型时建议调大，避免最终 REASON/RESULT 被截断。",
+    "description": "大模型单次审核输出的最大 token 数（全局默认值）。使用会先输出思考过程的本地模型时建议调大，避免最终 REASON/RESULT 被截断。",
     "type": "int",
     "default": 512
   },
   "llm_timeout_seconds": {
-    "description": "大模型接口请求超时时间（秒）。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。",
+    "description": "大模型接口请求超时时间（秒，全局默认值）。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。",
     "type": "float",
     "default": 120.0
   },

@@ -53,13 +53,12 @@
 
 | 配置项 | 说明 | 推荐值 |
 | :--- | :--- | :--- |
-| **llm_model** | **(核心)** 模型名称。必须支持视觉 (Vision)。 | `gemini-1.5-pro` 或 `gemini-2.5-pro` |
-| **llm_base_url** | 模型接口地址。支持 OpenAI 格式中转。 | 你的中转地址 |
+| **llm_providers** | **(核心·新版)** 供应商列表，支持动态增删排序。每个条目可选模板：**OpenAI 兼容**（填写 api_key/base_url/model）或 **AstrBot 当前 Provider**（复用 AstrBot 配置）。旧版平铺配置 (llm_api_key 等) 首次启动时会自动迁移。 | 在 Dashboard 中配置 → 添加条目 → 选择模板 |
 | **sensitive_texts** | **文字识图**：图片里有这些字就封。 | `["加微信", "退款", "代充"]` |
 | **forbidden_descriptions** | **内容识图**：画面是这个东西就封。 | `["东亚地图", "裸露画面", "政治隐喻图"]` |
 | **custom_vision_prompt** | **自定义引导词**：教 AI 怎么看图。 | "请仔细分辨地图轮廓，非地图类图片一律放行。" |
-| **llm_max_tokens** | **输出上限**：大模型单次审核输出的最大 token 数。本地 reasoning 模型容易先输出思考过程，建议调大避免截断最终结论。 | `512` |
-| **llm_timeout_seconds** | **请求超时**：大模型接口请求超时时间。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。 | `120.0` |
+| **llm_max_tokens** | **输出上限**（全局默认值）：大模型单次审核输出的最大 token 数。本地 reasoning 模型容易先输出思考过程，建议调大避免截断最终结论。 | `512` |
+| **llm_timeout_seconds** | **请求超时**（全局默认值）：大模型接口请求超时时间。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。 | `120.0` |
 | **compressed_image_max_bytes** | **图片压缩上限**：发送给大模型审核前会把图片压缩到该字节数以内，默认 1MB。 | `1048576` |
 | **keep_compressed_image_in_temp** | **保留压缩图**：开启后会把压缩后的送审 JPEG 保存到 AstrBot 的 `data/temp/astrbot_plugin_image_guard` 子目录，并在日志中输出文件路径，便于调试压缩质量。 | `false` |
 | **debug_log_llm_response** | **调试日志**：是否将大模型返回的原始内容输出到日志。可能包含审核理由或图片相关敏感信息，默认关闭。 | `false` |

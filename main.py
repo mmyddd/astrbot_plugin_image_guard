@@ -9,11 +9,47 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.6.6") # 版本号升级
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        self._migrate_old_config()
+
+    # ── 旧配置迁移 ──────────────────────────────────────────────
+
+    def _migrate_old_config(self):
+        """从旧版平铺 API 配置 (llm_api_key / llm_base_url / llm_model 等) 迁移到新版 template_list。
+
+        仅在新版 `llm_providers` 为空且旧版配置存在时执行，每次插件加载都会检查，
+        保证原地升级用户的无感过渡。迁移结果仅在内存中生效，不写回磁盘文件。
+        """
+        if self.config.get("llm_providers") and len(self.config["llm_providers"]) > 0:
+            return  # 已有新版配置，跳过
+
+        old_entries = []
+        for i in range(1, 9):
+            suffix = "" if i == 1 else f"_{i}"
+            api_key = self.config.get(f"llm_api_key{suffix}", "")
+            base_url = self.config.get(f"llm_base_url{suffix}", "")
+            model = self.config.get(f"llm_model{suffix}", "")
+            if api_key and base_url:
+                old_entries.append({
+                    "__template_key": "openai_compatible",
+                    "name": f"旧配置 API{i}",
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "model": model,
+                })
+
+        if old_entries:
+            self.config["llm_providers"] = old_entries
+            logger.info(
+                f"[ImageGuard] 已从旧版配置迁移 {len(old_entries)} 个供应商"
+                f"到新版 llm_providers。可在 Dashboard 中查看和管理。"
+            )
+
+    # ── 消息处理入口 ────────────────────────────────────────────
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_image_message(self, event: AstrMessageEvent):
@@ -37,20 +73,20 @@ class ImageGuard(Star):
                 raw_chain = event.original_event.message
             elif hasattr(event.message_obj, "raw_message"):
                 raw_chain = event.message_obj.raw_message
-            
+
             if isinstance(raw_chain, list):
                 for seg in raw_chain:
                     if isinstance(seg, dict) and seg.get("type") == "image":
                         data = seg.get("data", {})
                         sub_type = int(data.get("sub_type", 0))
-                        if sub_type != 0: return # 忽略表情包
+                        if sub_type != 0: return  # 忽略表情包
         except Exception:
-            pass 
+            pass
 
         # === 3. 提取图片 URL 并过滤 GIF ===
         message_obj = event.message_obj
         if not message_obj.message: return
-            
+
         image_urls = []
         for component in message_obj.message:
             if isinstance(component, Image):
@@ -59,7 +95,7 @@ class ImageGuard(Star):
                     if clean_url.endswith('.gif'):
                         continue
                     image_urls.append(component.url)
-        
+
         if not image_urls: return
 
         # === 4. 概率抽查 ===
@@ -68,7 +104,7 @@ class ImageGuard(Star):
         # === 5. 检查配置 ===
         forbidden_texts = self.config.get("sensitive_texts", [])
         forbidden_descs = self.config.get("forbidden_descriptions", [])
-        
+
         if not forbidden_texts and not forbidden_descs: return
 
         # === 6. 审核逻辑 ===
@@ -86,7 +122,6 @@ class ImageGuard(Star):
         )
 
         try:
-            # [Fix] 优先使用独立配置的 LLM
             max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
             keep_compressed_image_in_temp = bool(
                 self.config.get("keep_compressed_image_in_temp", False)
@@ -101,11 +136,11 @@ class ImageGuard(Star):
             response_text = await self._call_audit_llm(prompt, audit_image_urls)
             if self.config.get("debug_log_llm_response", False):
                 logger.info(f"[ImageGuard] LLM 返回内容: {response_text}")
-            
+
             # === 7. 解析结果 ===
             result_match = re.search(r"RESULT:\s*(VIOLATION|SAFE)", response_text, re.IGNORECASE)
             reason_match = re.search(r"REASON:\s*(.+)", response_text, re.IGNORECASE)
-            
+
             is_violation = False
             reason_str = "未说明理由"
 
@@ -114,7 +149,7 @@ class ImageGuard(Star):
             # 兜底检测
             if not result_match and "VIOLATION" in response_text.upper():
                 is_violation = True
-                
+
             if reason_match:
                 reason_str = reason_match.group(1).strip()
             elif is_violation:
@@ -124,15 +159,70 @@ class ImageGuard(Star):
             if is_violation:
                 logger.info(f"[ImageGuard] 违规命中: {reason_str}")
                 await self.enforce_penalty(event, image_urls[0], is_group, reason_str)
-                
+
         except Exception as e:
             logger.error(f"[ImageGuard] Check failed: {e}")
 
-    async def _call_single_api(self, prompt, image_urls, api_key, base_url, model_name, api_name="API"):
-        """调用单个API进行审核"""
+    # ── 多供应商调用核心 ──────────────────────────────────────
+
+    async def _call_audit_llm(self, prompt, image_urls):
+        """按 llm_providers 列表顺序依次尝试，第一个成功的即返回。
+
+        列表中每个条目是一个"供应商"，由其 ``__template_key`` 字段区分类型：
+        - ``openai_compatible``：通过 OpenAI 兼容 API 调用（需填写 api_key / base_url）
+        - ``astrbot_provider``：复用 AstrBot 当前会话配置的 LLM Provider
+        """
+        providers = self.config.get("llm_providers", [])
+        if not providers:
+            logger.info("[ImageGuard] 未配置任何供应商，直接使用 AstrBot Provider")
+            return await self._call_astrbot_provider(prompt, image_urls)
+
+        last_exception = None
+        for prov in providers:
+            template = prov.get("__template_key", "")
+            prov_name = prov.get("name", "Unknown")
+            try:
+                if template == "openai_compatible":
+                    logger.info(f"[ImageGuard] 尝试 OpenAI 兼容供应商「{prov_name}」...")
+                    result = await self._call_single_api(prompt, image_urls, prov)
+                    if not result or not result.strip():
+                        raise ValueError(f"「{prov_name}」返回内容为空")
+                    logger.info(f"[ImageGuard] 供应商「{prov_name}」审核成功")
+                    return result
+
+                elif template == "astrbot_provider":
+                    logger.info(f"[ImageGuard] 尝试 AstrBot Provider「{prov_name}」...")
+                    return await self._call_astrbot_provider(prompt, image_urls)
+
+                else:
+                    logger.warning(f"[ImageGuard] 跳过未知模板类型: {template}")
+
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"[ImageGuard] 供应商「{prov_name}」调用失败: {e}")
+                continue
+
+        # 全部失败
+        if last_exception:
+            raise RuntimeError(
+                f"所有供应商均不可用（共 {len(providers)} 个）"
+            ) from last_exception
+        raise RuntimeError("没有可用的供应商配置")
+
+    async def _call_single_api(self, prompt, image_urls, provider: dict):
+        """调用单个 OpenAI 兼容 API 进行审核。
+
+        Args:
+            provider: 供应商配置字典，包含 api_key / base_url / model / name 等字段。
+        """
+        api_key = provider.get("api_key", "")
+        base_url = provider.get("base_url", "")
+        model_name = provider.get("model", "")
+        api_name = provider.get("name", "OpenAI API")
+
         if not api_key or not base_url:
             return None
-        
+
         messages = [
             {
                 "role": "user",
@@ -141,7 +231,6 @@ class ImageGuard(Star):
                 ]
             }
         ]
-        # 添加图片
         for url in image_urls:
             messages[0]["content"].append({
                 "type": "image_url",
@@ -153,11 +242,12 @@ class ImageGuard(Star):
             payload = {
                 "model": model_name or "gpt-4o",
                 "messages": messages,
-                "max_tokens": int(self.config.get("llm_max_tokens", 512))
+                "max_tokens": int(self.config.get("llm_max_tokens", 512)),
             }
             reasoning_effort = self.config.get("reasoning_effort", "")
             if reasoning_effort:
                 payload["reasoning_effort"] = reasoning_effort
+
             resp = await client.post(
                 f"{base_url.rstrip('/')}/v1/chat/completions",
                 json=payload,
@@ -166,60 +256,43 @@ class ImageGuard(Star):
             resp.raise_for_status()
             response_json = resp.json()
             if self.config.get("debug_log_llm_response", False):
-                logger.info(f"[ImageGuard] {api_name} 原始响应: {json.dumps(response_json, ensure_ascii=False)}")
+                logger.info(
+                    f"[ImageGuard] {api_name} 原始响应: "
+                    f"{json.dumps(response_json, ensure_ascii=False)}"
+                )
 
             choice = response_json["choices"][0]
             message = choice.get("message", {})
             content = message.get("content") or choice.get("text")
             if not content or not str(content).strip():
                 finish_reason = choice.get("finish_reason", "unknown")
-                raise ValueError(f"{api_name} 返回内容为空，finish_reason={finish_reason}")
+                raise ValueError(
+                    f"{api_name} 返回内容为空，finish_reason={finish_reason}"
+                )
 
             return str(content)
 
-    async def _call_audit_llm(self, prompt, image_urls):
-        """支持API切换：依次尝试API1→API2→...→API8→AstrBot Provider"""
-        # 收集所有API配置
-        api_configs = []
-        for i in range(1, 9):
-            suffix = "" if i == 1 else f"_{i}"
-            api_key = self.config.get(f"llm_api_key{suffix}")
-            api_base = self.config.get(f"llm_base_url{suffix}")
-            api_model = self.config.get(f"llm_model{suffix}")
-            if api_key and api_base:
-                api_configs.append((f"API{i}", api_key, api_base, api_model))
-        
-        # 依次尝试每个API
-        for api_name, api_key, api_base, api_model in api_configs:
-            try:
-                logger.info(f"[ImageGuard] 尝试使用 {api_name} 进行审核...")
-                result = await self._call_single_api(prompt, image_urls, api_key, api_base, api_model, api_name)
-                if not result or not result.strip():
-                    raise ValueError(f"{api_name} 返回内容为空")
-                logger.info(f"[ImageGuard] {api_name} 审核成功")
-                return result
-            except Exception as e:
-                logger.warning(f"[ImageGuard] {api_name} 调用失败: {e}")
-        
-        # 所有API都失败，回退到 AstrBot Provider
-        logger.info("[ImageGuard] 尝试使用 AstrBot Provider 回退模式...")
+    async def _call_astrbot_provider(self, prompt, image_urls):
+        """回退到 AstrBot 当前会话配置的 LLM Provider。"""
         provider = self.context.get_using_provider()
         if not provider:
             raise ValueError("No provider available")
-        
+
         resp = await provider.text_chat(
             prompt=prompt,
             image_urls=image_urls,
-            session_id=None
+            session_id=None,
         )
         return resp.completion_text
+
+    # ── 判罚执行 ────────────────────────────────────────────────
 
     async def enforce_penalty(self, event: AstrMessageEvent, violation_img_url: str, is_group: bool, reason: str):
         """执行判罚 (依赖 OneBot 协议)"""
         user_id = event.get_sender_id()
         group_id = event.get_group_id()
         user_name = event.get_sender_name()
-        
+
         recalled = False
         banned = False
         duration = int(self.config.get("ban_duration", 86400))
@@ -238,7 +311,7 @@ class ImageGuard(Star):
                 msg_id = None
                 if hasattr(event.message_obj, "message_id"):
                     msg_id = event.message_obj.message_id
-                
+
                 if msg_id:
                     await client.api.call_action('delete_msg', message_id=msg_id)
                     recalled = True
@@ -265,7 +338,7 @@ class ImageGuard(Star):
                 target_type, target_id = report_target
                 source_str = f"群 {group_id}" if is_group else "私聊"
                 status_str = f"撤回:{'✅' if recalled else '❌'} 禁言:{'✅' if banned else '❌'}"
-                
+
                 text_content = (
                     f"🕵️ [静默执法报告]\n"
                     f"来源: {source_str}\n"
