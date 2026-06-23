@@ -336,21 +336,27 @@ class ImageGuard(Star):
 
     def _get_report_target(self, group_id: str | None, is_group: bool):
         if is_group and group_id:
-            group_targets = self.config.get("group_report_targets", [])
-            for item in group_targets:
-                group_text, separator, target_text = str(item).partition(":")
-                if not separator or group_text.strip() != str(group_id):
-                    continue
+            for entry in self.config.get("group_report_targets", []):
+                # 兼容旧版字符串格式 "来源群号:type:id"
+                if isinstance(entry, str):
+                    group_text, _, target_text = entry.partition(":")
+                    if not _ or group_text.strip() != str(group_id):
+                        continue
+                    target_kind, sep, target_id_text = target_text.partition(":")
+                    if sep:
+                        target_kind = target_kind.strip().lower()
+                        target_id = int(target_id_text.strip())
+                    else:
+                        target_kind = "private"
+                        target_id = int(target_text.strip())
+                    return target_kind, target_id
 
-                target_kind_text, kind_separator, target_id_text = target_text.partition(":")
-                if kind_separator:
-                    target_kind = target_kind_text.strip().lower()
-                    target_id = int(target_id_text.strip())
-                else:
-                    target_kind = "private"
-                    target_id = int(target_text.strip())
-
-                return target_kind, target_id
+                # 新版 template_list 格式
+                if entry.get("source_group_id", "").strip() == str(group_id):
+                    target_kind = entry.get("target_type", "private").strip().lower()
+                    raw_id = entry.get("target_id", "").strip()
+                    if raw_id:
+                        return target_kind, int(raw_id)
 
         report_target = self.config.get("report_target_id")
         if report_target:

@@ -160,11 +160,34 @@
     "default": ""
   },
   "group_report_targets": {
-    "description": "群聊违规上报接收人映射。格式为 \"来源群号:private:接收人QQ\" 或 \"来源群号:group:接收群号\"。旧格式 \"来源群号:接收人QQ\" 仍按私聊处理；未匹配时回退到 report_target_id。",
-    "type": "list",
+    "description": "群聊违规上报接收人映射列表。按来源群指定战报接收目标。未匹配任何规则时回退到 report_target_id。",
+    "type": "template_list",
     "default": [],
-    "items": {
-      "type": "string"
+    "templates": {
+      "group_mapping": {
+        "name": "群上报映射",
+        "description": "指定某个群的违规战报发送到哪里",
+        "items": {
+          "source_group_id": {
+            "description": "来源群号",
+            "type": "string",
+            "default": "",
+            "hint": "要监听的群号"
+          },
+          "target_type": {
+            "description": "接收目标类型",
+            "type": "string",
+            "default": "private",
+            "hint": "private=私聊, group=群聊"
+          },
+          "target_id": {
+            "description": "接收目标 ID",
+            "type": "string",
+            "default": "",
+            "hint": "QQ 号（私聊）或群号（群聊）"
+          }
+        }
+      }
     }
   },
   "enable_recall": {
