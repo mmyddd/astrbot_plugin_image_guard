@@ -18,31 +18,31 @@ class ImageGuard(Star):
 
         # ── 审核历史 API ──
         context.register_web_api(
-            "/image_guard/audit/list",
+            "/astrbot_plugin_image_guard/audit/list",
             self._api_audit_list,
             ["GET"],
             "获取审核记录列表",
         )
         context.register_web_api(
-            "/image_guard/audit/clear",
+            "/astrbot_plugin_image_guard/audit/clear",
             self._api_audit_clear,
             ["POST", "DELETE"],
             "清空审核记录",
         )
         context.register_web_api(
-            "/image_guard/audit/delete",
+            "/astrbot_plugin_image_guard/audit/delete",
             self._api_audit_delete,
             ["POST", "DELETE"],
             "删除单条审核记录",
         )
         context.register_web_api(
-            "/image_guard/audit/config",
+            "/astrbot_plugin_image_guard/audit/config",
             self._api_audit_config_get,
             ["GET"],
             "获取插件配置",
         )
         context.register_web_api(
-            "/image_guard/audit/config/update",
+            "/astrbot_plugin_image_guard/audit/config/update",
             self._api_audit_config_update,
             ["POST"],
             "更新插件配置并重载",
