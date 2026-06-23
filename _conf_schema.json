@@ -84,8 +84,8 @@
           "base_url": {
             "description": "API 地址",
             "type": "string",
-            "default": "https://api-inference.modelscope.cn/v1",
-            "hint": "一般无需修改"
+            "default": "https://api-inference.modelscope.cn",
+            "hint": "一般无需修改，插件会自动追加 /v1/chat/completions"
           },
           "model": {
             "description": "模型名",
