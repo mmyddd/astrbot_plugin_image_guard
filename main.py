@@ -452,7 +452,7 @@ class ImageGuard(Star):
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
-        return {"data": records, "provider_stats": stats}
+        return {"records": records, "provider_stats": stats}
 
     async def _api_audit_clear(self):
         await self.put_kv_data("audit_history", [])
@@ -474,11 +474,11 @@ class ImageGuard(Star):
         """返回当前插件配置（排除 KV 类数据）"""
         from astrbot.core.star.star import star_registry
         for plugin_md in star_registry:
-            if plugin_md.name == "image_guard":
+            if plugin_md.name == "astrbot_plugin_image_guard":
                 if plugin_md.config:
-                    return {"data": dict(plugin_md.config)}
+                    return dict(plugin_md.config)
                 break
-        return {"data": dict(self.config)}
+        return dict(self.config)
 
     async def _api_audit_config_update(self):
         """更新插件配置并重载插件"""
@@ -490,12 +490,12 @@ class ImageGuard(Star):
             return {"message": "empty config"}, 400
 
         for plugin_md in star_registry:
-            if plugin_md.name == "image_guard":
+            if plugin_md.name == "astrbot_plugin_image_guard":
                 if plugin_md.config:
                     plugin_md.config.save_config(new_config)
                     # 重载插件使新配置生效
                     if hasattr(self.context, "_star_manager"):
-                        await self.context._star_manager.reload("image_guard")
+                        await self.context._star_manager.reload("astrbot_plugin_image_guard")
                     return {"message": "ok"}
                 break
 

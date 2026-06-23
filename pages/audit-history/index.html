@@ -336,7 +336,7 @@ async function loadRecords() {
   tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中...</td></tr>';
   try {
     const res = await window.AstrBotPluginPage.apiGet('audit/list');
-    allRecords = (res.data || []).reverse();
+    allRecords = (res.records || []).reverse();
     renderStats(res.provider_stats);
     render();
   } catch (e) {
@@ -455,7 +455,7 @@ async function loadConfig() {
   document.getElementById('config-status').textContent = '加载中...';
   try {
     const res = await window.AstrBotPluginPage.apiGet('audit/config');
-    const cfg = res.data || {};
+    const cfg = res || {};
     setTextarea('cfg-sensitive_texts', listToLines(cfg.sensitive_texts));
     setTextarea('cfg-forbidden_descriptions', listToLines(cfg.forbidden_descriptions));
     setTextarea('cfg-custom_vision_prompt', cfg.custom_vision_prompt || '');
