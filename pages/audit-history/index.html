@@ -388,7 +388,7 @@ function render() {
     const group = r.group_id ? `群 ${r.group_id}` : '私聊';
     const reason = r.reason || '-';
     const imgHtml = r.image_url
-      ? `<img class="image-thumb" src="${escHtml(r.image_url)}" onclick="preview('${escHtml(r.image_url)}')" alt="违规图片">`
+      ? `<img class="image-thumb" data-src="${escHtml(r.image_url)}" onclick="preview('${escHtml(r.image_url)}')" alt="\u8fdd\u89c4\u56fe\u7247">`
       : '-';
     const recallTag = r.recalled
       ? '<span class="tag tag-success">✅ 已撤回</span>'
@@ -409,6 +409,12 @@ function render() {
       <td><button class="btn btn-sm btn-danger" onclick="deleteRecord('${escHtml(r.id)}')">删除</button></td>
     </tr>`;
   }).join('');
+
+  // 绕过 AstrBot HTML 重写：把 data-src 回填到 src
+  tbody.querySelectorAll('img[data-src]').forEach(img => {
+    img.src = img.getAttribute('data-src');
+    img.removeAttribute('data-src');
+  });
 
   const pg = document.getElementById('pagination');
   pg.innerHTML = `
