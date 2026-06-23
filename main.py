@@ -459,8 +459,9 @@ class ImageGuard(Star):
         return {"message": "ok"}
 
     async def _api_audit_delete(self):
-        from flask import request
-        record_id = request.args.get("id") or request.json.get("id") if request.is_json else None
+        from quart import request
+        data = await request.get_json(silent=True) or {}
+        record_id = request.args.get("id") or data.get("id")
         if not record_id:
             return {"message": "missing id"}, 400
         records = await self.get_kv_data("audit_history", [])
@@ -482,7 +483,7 @@ class ImageGuard(Star):
 
     async def _api_audit_config_update(self):
         """更新插件配置并重载插件"""
-        from flask import request
+        from quart import request
         from astrbot.core.star.star import star_registry
 
         new_config = await request.get_json()
