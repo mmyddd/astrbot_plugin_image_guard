@@ -14,40 +14,6 @@ class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        self._migrate_old_config()
-
-    # ── 旧配置迁移 ──────────────────────────────────────────────
-
-    def _migrate_old_config(self):
-        """从旧版平铺 API 配置 (llm_api_key / llm_base_url / llm_model 等) 迁移到新版 template_list。
-
-        仅在新版 `llm_providers` 为空且旧版配置存在时执行，每次插件加载都会检查，
-        保证原地升级用户的无感过渡。迁移结果仅在内存中生效，不写回磁盘文件。
-        """
-        if self.config.get("llm_providers") and len(self.config["llm_providers"]) > 0:
-            return  # 已有新版配置，跳过
-
-        old_entries = []
-        for i in range(1, 9):
-            suffix = "" if i == 1 else f"_{i}"
-            api_key = self.config.get(f"llm_api_key{suffix}", "")
-            base_url = self.config.get(f"llm_base_url{suffix}", "")
-            model = self.config.get(f"llm_model{suffix}", "")
-            if api_key and base_url:
-                old_entries.append({
-                    "__template_key": "openai_compatible",
-                    "name": f"旧配置 API{i}",
-                    "api_key": api_key,
-                    "base_url": base_url,
-                    "model": model,
-                })
-
-        if old_entries:
-            self.config["llm_providers"] = old_entries
-            logger.info(
-                f"[ImageGuard] 已从旧版配置迁移 {len(old_entries)} 个供应商"
-                f"到新版 llm_providers。可在 Dashboard 中查看和管理。"
-            )
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -182,20 +148,19 @@ class ImageGuard(Star):
             template = prov.get("__template_key", "")
             prov_name = prov.get("name", "Unknown")
             try:
-                if template == "openai_compatible":
+                if template == "astrbot_provider":
+                    logger.info(f"[ImageGuard] 尝试 AstrBot Provider「{prov_name}」...")
+                    return await self._call_astrbot_provider(prompt, image_urls)
+
+                else:
+                    # 所有非 astrbot_provider 的模板（openai_compatible / modelscope 等）
+                    # 均视为 OpenAI 兼容接口处理
                     logger.info(f"[ImageGuard] 尝试 OpenAI 兼容供应商「{prov_name}」...")
                     result = await self._call_single_api(prompt, image_urls, prov)
                     if not result or not result.strip():
                         raise ValueError(f"「{prov_name}」返回内容为空")
                     logger.info(f"[ImageGuard] 供应商「{prov_name}」审核成功")
                     return result
-
-                elif template == "astrbot_provider":
-                    logger.info(f"[ImageGuard] 尝试 AstrBot Provider「{prov_name}」...")
-                    return await self._call_astrbot_provider(prompt, image_urls)
-
-                else:
-                    logger.warning(f"[ImageGuard] 跳过未知模板类型: {template}")
 
             except Exception as e:
                 last_exception = e

@@ -66,6 +66,34 @@
             "default": "AstrBot Provider"
           }
         }
+      },
+      "modelscope": {
+        "name": "ModelScope",
+        "description": "ModelScope 推理 API（https://api-inference.modelscope.cn），OpenAI 格式兼容，支持 Qwen、Llama、DeepSeek 等模型",
+        "items": {
+          "name": {
+            "description": "供应商别名（仅用于日志标识）",
+            "type": "string",
+            "default": "ModelScope"
+          },
+          "api_key": {
+            "description": "ModelScope API Token",
+            "type": "string",
+            "default": ""
+          },
+          "base_url": {
+            "description": "API 地址",
+            "type": "string",
+            "default": "https://api-inference.modelscope.cn/v1",
+            "hint": "一般无需修改"
+          },
+          "model": {
+            "description": "模型名",
+            "type": "string",
+            "default": "",
+            "hint": "例如：Qwen/Qwen2.5-VL-72B-Instruct、deepseek-ai/DeepSeek-VL2"
+          }
+        }
       }
     }
   },
