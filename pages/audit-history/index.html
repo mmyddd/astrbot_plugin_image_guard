@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>审核记录</title>
+<title>ImageGuard</title>
 <style>
   :root {
     --bg: #f5f5f5;
@@ -14,7 +14,6 @@
     --primary: #1976d2;
     --danger: #d32f2f;
     --success: #2e7d32;
-    --warn-bg: #fff3e0;
     --radius: 8px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -24,10 +23,18 @@
     color: var(--text);
     padding: 16px;
   }
-  .header {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
+
+  /* ── 标签栏 ── */
+  .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
+  .tab {
+    padding: 8px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
+    color: var(--text-secondary); border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: all .15s; user-select: none;
   }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
   .header h1 { font-size: 20px; font-weight: 600; }
   .header-actions { display: flex; gap: 8px; }
   .btn {
@@ -40,11 +47,11 @@
   .btn-danger:hover { background: var(--danger); color: #fff; }
   .btn-primary { color: var(--primary); border-color: var(--primary); }
   .btn-primary:hover { background: var(--primary); color: #fff; }
+  .btn-success { color: var(--success); border-color: var(--success); }
+  .btn-success:hover { background: var(--success); color: #fff; }
   .btn-sm { padding: 4px 10px; font-size: 12px; }
 
-  .stats {
-    display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
-  }
+  .stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
   .stat-card {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 12px 20px; flex: 1; min-width: 120px;
@@ -60,99 +67,224 @@
   .provider-bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .provider-bar-wrap .name { font-size: 12px; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .provider-bar-wrap .count { font-size: 11px; color: var(--text-secondary); min-width: 36px; text-align: right; }
-  .provider-bar {
-    flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden;
-  }
-  .provider-bar-fill {
-    height: 100%; background: var(--primary); border-radius: 4px; transition: width .3s;
-  }
+  .provider-bar { flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+  .provider-bar-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width .3s; }
 
-  table {
-    width: 100%; border-collapse: collapse; background: var(--card);
-    border-radius: var(--radius); overflow: hidden; font-size: 13px;
-  }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: var(--radius); overflow: hidden; font-size: 13px; }
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
   th { background: #fafafa; font-weight: 600; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
   .empty { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
 
-  .image-thumb {
-    width: 60px; height: 60px; object-fit: cover; border-radius: 4px;
-    cursor: pointer; border: 1px solid var(--border); transition: transform .15s;
-  }
+  .image-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); transition: transform .15s; }
   .image-thumb:hover { transform: scale(1.1); }
-  .tag {
-    display: inline-block; padding: 2px 6px; border-radius: 3px;
-    font-size: 11px; font-weight: 500;
-  }
+  .tag { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 500; }
   .tag-success { background: #e8f5e9; color: var(--success); }
   .tag-fail { background: #ffebee; color: var(--danger); }
   .tag-muted { background: #f5f5f5; color: var(--text-secondary); }
   .reason-text { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .user-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  /* lightbox */
-  .lightbox {
-    display: none; position: fixed; inset: 0; z-index: 9999;
-    background: rgba(0,0,0,.85); justify-content: center; align-items: center;
-    cursor: zoom-out;
-  }
+  .lightbox { display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.85); justify-content: center; align-items: center; cursor: zoom-out; }
   .lightbox.open { display: flex; }
   .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 4px; }
 
-  /* pagination */
-  .pagination {
-    display: flex; justify-content: center; align-items: center; gap: 8px;
-    margin-top: 16px; font-size: 13px;
-  }
+  .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; font-size: 13px; }
   .pagination .btn:disabled { opacity: .3; cursor: default; }
+
+  /* ── 配置面板 ── */
+  .config-panel { display: none; }
+  .config-panel.active { display: block; }
+  .audit-panel { display: block; }
+  .audit-panel.hidden { display: none; }
+
+  .config-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 16px;
+  }
+  .config-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .config-row { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+  .config-row label { min-width: 160px; font-size: 13px; font-weight: 500; padding-top: 6px; color: var(--text); }
+  .config-row .hint { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .config-row input[type="text"],
+  .config-row input[type="number"],
+  .config-row select,
+  .config-row textarea {
+    flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px;
+    font-size: 13px; font-family: inherit; background: var(--card); color: var(--text);
+  }
+  .config-row textarea { min-height: 60px; resize: vertical; }
+  .config-row input[type="checkbox"] { margin-top: 8px; transform: scale(1.2); }
+  .config-row .complex-field { flex: 1; font-size: 12px; color: var(--text-secondary); padding-top: 6px; }
 
   @media (max-width: 600px) {
     table { font-size: 12px; }
     th, td { padding: 6px 8px; }
     .image-thumb { width: 40px; height: 40px; }
+    .config-row { flex-direction: column; gap: 4px; }
+    .config-row label { min-width: auto; }
   }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>🕵️ 审核记录</h1>
+  <h1>🕵️ ImageGuard</h1>
   <div class="header-actions">
     <button class="btn btn-primary btn-sm" onclick="refresh()">🔄 刷新</button>
-    <button class="btn btn-danger btn-sm" onclick="clearAll()">🗑️ 清空</button>
   </div>
 </div>
 
-<div class="stats">
-  <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">总记录</div></div>
-  <div class="stat-card"><div class="num" id="stat-recalled">0</div><div class="label">已撤回</div></div>
-  <div class="stat-card"><div class="num" id="stat-banned">0</div><div class="label">已禁言</div></div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('audit')" id="tab-audit">📋 审核记录</div>
+  <div class="tab" onclick="switchTab('config')" id="tab-config">⚙️ 配置</div>
 </div>
 
-<div class="provider-section" id="provider-section">
-  <div class="title">🤖 供应商调用统计</div>
-  <div id="provider-stats">加载中...</div>
+<!-- ════ 审核记录面板 ════ -->
+<div class="audit-panel" id="panel-audit">
+  <div class="stats">
+    <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">总记录</div></div>
+    <div class="stat-card"><div class="num" id="stat-recalled">0</div><div class="label">已撤回</div></div>
+    <div class="stat-card"><div class="num" id="stat-banned">0</div><div class="label">已禁言</div></div>
+  </div>
+
+  <div class="provider-section">
+    <div class="title">🤖 供应商调用统计</div>
+    <div id="provider-stats">加载中...</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>时间</th>
+        <th>用户</th>
+        <th>来源</th>
+        <th>理由</th>
+        <th>图片</th>
+        <th>撤回</th>
+        <th>禁言</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
+  </table>
+
+  <div class="pagination" id="pagination"></div>
 </div>
 
-<table>
-  <thead>
-    <tr>
-      <th>时间</th>
-      <th>用户</th>
-      <th>来源</th>
-      <th>理由</th>
-      <th>图片</th>
-      <th>撤回</th>
-      <th>禁言</th>
-      <th>操作</th>
-    </tr>
-  </thead>
-  <tbody id="tbody">
-    <tr><td colspan="8" class="empty">加载中...</td></tr>
-  </tbody>
-</table>
+<!-- ════ 配置面板 ════ -->
+<div class="config-panel" id="panel-config">
+  <div class="config-section">
+    <h3>🎯 审查规则</h3>
+    <div class="config-row">
+      <label>敏感文字 <div class="hint">图片中含这些文字即违规，每行一个</div></label>
+      <textarea id="cfg-sensitive_texts" rows="3"></textarea>
+    </div>
+    <div class="config-row">
+      <label>违规画面描述 <div class="hint">图片画面符合这些描述即违规，每行一个</div></label>
+      <textarea id="cfg-forbidden_descriptions" rows="3"></textarea>
+    </div>
+    <div class="config-row">
+      <label>自定义识图引导词</label>
+      <textarea id="cfg-custom_vision_prompt" rows="3"></textarea>
+    </div>
+  </div>
 
-<div class="pagination" id="pagination"></div>
+  <div class="config-section">
+    <h3>🔧 LLM 供应商</h3>
+    <div class="config-row">
+      <label>供应商列表</label>
+      <div class="complex-field">
+        请在 <a href="#" onclick="openPluginConfig()" style="color:var(--primary)">插件配置页</a> 中管理供应商（增删排序）
+        <br><span id="cfg-provider-summary" style="font-size:11px;"></span>
+      </div>
+    </div>
+    <div class="config-row">
+      <label>reasoning_effort</label>
+      <select id="cfg-reasoning_effort">
+        <option value="">不启用</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select>
+    </div>
+    <div class="config-row">
+      <label>最大 Token 数</label>
+      <input type="number" id="cfg-llm_max_tokens" min="64" max="8192" step="64">
+    </div>
+    <div class="config-row">
+      <label>超时秒数</label>
+      <input type="number" id="cfg-llm_timeout_seconds" min="10" max="600" step="10">
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3>📡 范围控制</h3>
+    <div class="config-row">
+      <label>启用审查的群号 <div class="hint">每行一个，"0" 表示所有群</div></label>
+      <textarea id="cfg-group_scope" rows="3"></textarea>
+    </div>
+    <div class="config-row">
+      <label>启用审查的私聊用户 <div class="hint">每行一个，"0" 表示所有私聊</div></label>
+      <textarea id="cfg-private_scope" rows="3"></textarea>
+    </div>
+    <div class="config-row">
+      <label>抽查概率</label>
+      <input type="number" id="cfg-check_probability" min="0" max="1" step="0.05">
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3>⚖️ 判罚设置</h3>
+    <div class="config-row">
+      <label>撤回违规消息</label>
+      <input type="checkbox" id="cfg-enable_recall">
+    </div>
+    <div class="config-row">
+      <label>禁言时长（秒）<div class="hint">0 为不禁言</div></label>
+      <input type="number" id="cfg-ban_duration" min="0" max="2592000">
+    </div>
+    <div class="config-row">
+      <label>上报目标 ID</label>
+      <input type="text" id="cfg-report_target_id" placeholder="留空不转发">
+    </div>
+    <div class="config-row">
+      <label>群上报映射</label>
+      <div class="complex-field">
+        请在 <a href="#" onclick="openPluginConfig()" style="color:var(--primary)">插件配置页</a> 中管理
+      </div>
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3>🖼️ 图片处理</h3>
+    <div class="config-row">
+      <label>压缩上限（字节）</label>
+      <input type="number" id="cfg-compressed_image_max_bytes" min="1024" max="10485760" step="1024">
+    </div>
+    <div class="config-row">
+      <label>历史最大条数</label>
+      <input type="number" id="cfg-audit_history_max_records" min="0" max="10000">
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3>🔍 调试</h3>
+    <div class="config-row">
+      <label>保留压缩图到临时目录</label>
+      <input type="checkbox" id="cfg-keep_compressed_image_in_temp">
+    </div>
+    <div class="config-row">
+      <label>调试日志（LLM 响应）</label>
+      <input type="checkbox" id="cfg-debug_log_llm_response">
+    </div>
+  </div>
+
+  <div style="text-align:right;margin-bottom:24px;">
+    <button class="btn" onclick="loadConfig()">↩️ 撤销</button>
+    <button class="btn btn-success" onclick="saveConfig()">💾 保存配置</button>
+  </div>
+  <div id="config-status" style="text-align:center;font-size:13px;margin-bottom:16px;"></div>
+</div>
 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
   <img id="lightbox-img" src="" alt="违规图片预览">
@@ -175,12 +307,36 @@ ready(async () => {
   await loadRecords();
 });
 
+/* ── 标签切换 ── */
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('panel-audit').classList.toggle('hidden', name !== 'audit');
+  document.getElementById('panel-audit').classList.toggle('audit-panel', name === 'audit');
+  document.getElementById('panel-config').classList.toggle('active', name === 'config');
+  if (name === 'config') loadConfig();
+}
+
+/* ── 跳转到插件配置页 ── */
+function openPluginConfig() {
+  // 通过 Bridge SDK 通知父页面跳转
+  window.parent.postMessage({
+    channel: 'astrbot-plugin-page',
+    type: 'navigate',
+    payload: { path: '/plugins' }
+  }, '*');
+}
+
+/* ══════════════════════════════════════════════
+   审核记录
+   ══════════════════════════════════════════════ */
+
 async function loadRecords() {
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中...</td></tr>';
   try {
     const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/list');
-    allRecords = (res.data || []).reverse(); // 最新的在前面
+    allRecords = (res.data || []).reverse();
     renderStats(res.provider_stats);
     render();
   } catch (e) {
@@ -200,10 +356,10 @@ function renderStats(stats) {
   container.innerHTML = keys.map(k => {
     const pct = (stats[k] / maxVal * 100).toFixed(0);
     return `<div class="provider-bar-wrap">
-        <span class="name" title="${escHtml(k)}">${escHtml(k)}</span>
-        <div class="provider-bar"><div class="provider-bar-fill" style="width:${pct}%"></div></div>
-        <span class="count">${stats[k]}</span>
-      </div>`;
+      <span class="name" title="${escHtml(k)}">${escHtml(k)}</span>
+      <div class="provider-bar"><div class="provider-bar-fill" style="width:${pct}%"></div></div>
+      <span class="count">${stats[k]}</span>
+    </div>`;
   }).join('');
 }
 
@@ -254,7 +410,6 @@ function render() {
     </tr>`;
   }).join('');
 
-  // Pagination
   const pg = document.getElementById('pagination');
   pg.innerHTML = `
     <button class="btn btn-sm" onclick="goPage(1)" ${currentPage <= 1 ? 'disabled' : ''}>首页</button>
@@ -265,44 +420,109 @@ function render() {
   `;
 }
 
-function goPage(p) {
-  currentPage = p;
-  render();
-}
-
+function goPage(p) { currentPage = p; render(); }
 function refresh() { currentPage = 1; loadRecords(); }
 
 async function clearAll() {
   if (!confirm('确定清空所有审核记录？')) return;
   try {
     await window.AstrBotPluginPage.apiPost('/image_guard/audit/clear', { _method: 'DELETE' });
-    allRecords = [];
-    currentPage = 1;
-    render();
-  } catch (e) {
-    alert('清空失败: ' + (e.message || e));
-  }
+    allRecords = []; currentPage = 1; render();
+  } catch (e) { alert('清空失败: ' + (e.message || e)); }
 }
 
 async function deleteRecord(id) {
   if (!confirm('确定删除此记录？')) return;
   try {
     await window.AstrBotPluginPage.apiPost('/image_guard/audit/delete', { id });
-    allRecords = allRecords.filter(r => r.id !== id);
-    render();
-  } catch (e) {
-    alert('删除失败: ' + (e.message || e));
-  }
+    allRecords = allRecords.filter(r => r.id !== id); render();
+  } catch (e) { alert('删除失败: ' + (e.message || e)); }
 }
 
 function preview(url) {
   document.getElementById('lightbox-img').src = url;
   document.getElementById('lightbox').classList.add('open');
 }
-
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('open');
 }
+
+/* ══════════════════════════════════════════════
+   配置编辑
+   ══════════════════════════════════════════════ */
+
+async function loadConfig() {
+  document.getElementById('config-status').textContent = '加载中...';
+  try {
+    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/config');
+    const cfg = res.data || {};
+    setTextarea('cfg-sensitive_texts', listToLines(cfg.sensitive_texts));
+    setTextarea('cfg-forbidden_descriptions', listToLines(cfg.forbidden_descriptions));
+    setTextarea('cfg-custom_vision_prompt', cfg.custom_vision_prompt || '');
+    setSelect('cfg-reasoning_effort', cfg.reasoning_effort || '');
+    setNumber('cfg-llm_max_tokens', cfg.llm_max_tokens);
+    setNumber('cfg-llm_timeout_seconds', cfg.llm_timeout_seconds);
+    setTextarea('cfg-group_scope', listToLines(cfg.group_scope));
+    setTextarea('cfg-private_scope', listToLines(cfg.private_scope));
+    setNumber('cfg-check_probability', cfg.check_probability);
+    setCheck('cfg-enable_recall', cfg.enable_recall);
+    setNumber('cfg-ban_duration', cfg.ban_duration);
+    setValue('cfg-report_target_id', cfg.report_target_id || '');
+    setNumber('cfg-compressed_image_max_bytes', cfg.compressed_image_max_bytes);
+    setNumber('cfg-audit_history_max_records', cfg.audit_history_max_records);
+    setCheck('cfg-keep_compressed_image_in_temp', cfg.keep_compressed_image_in_temp);
+    setCheck('cfg-debug_log_llm_response', cfg.debug_log_llm_response);
+
+    // 供应商摘要
+    const providers = cfg.llm_providers || [];
+    document.getElementById('cfg-provider-summary').textContent =
+      providers.length > 0
+        ? `已配置 ${providers.length} 个供应商：${providers.map(p => p.name || '?').join('、')}`
+        : '暂未配置供应商';
+
+    document.getElementById('config-status').textContent = '';
+  } catch (e) {
+    document.getElementById('config-status').textContent = '加载配置失败: ' + (e.message || e);
+  }
+}
+
+async function saveConfig() {
+  if (!confirm('保存配置后将重载插件，确定继续？')) return;
+  document.getElementById('config-status').textContent = '保存中...';
+  try {
+    const cfg = {
+      sensitive_texts: linesToList(document.getElementById('cfg-sensitive_texts').value),
+      forbidden_descriptions: linesToList(document.getElementById('cfg-forbidden_descriptions').value),
+      custom_vision_prompt: document.getElementById('cfg-custom_vision_prompt').value,
+      reasoning_effort: document.getElementById('cfg-reasoning_effort').value,
+      llm_max_tokens: parseInt(document.getElementById('cfg-llm_max_tokens').value) || 512,
+      llm_timeout_seconds: parseFloat(document.getElementById('cfg-llm_timeout_seconds').value) || 120,
+      group_scope: linesToList(document.getElementById('cfg-group_scope').value),
+      private_scope: linesToList(document.getElementById('cfg-private_scope').value),
+      check_probability: parseFloat(document.getElementById('cfg-check_probability').value) || 1.0,
+      enable_recall: document.getElementById('cfg-enable_recall').checked,
+      ban_duration: parseInt(document.getElementById('cfg-ban_duration').value) || 86400,
+      report_target_id: document.getElementById('cfg-report_target_id').value,
+      compressed_image_max_bytes: parseInt(document.getElementById('cfg-compressed_image_max_bytes').value) || 1048576,
+      audit_history_max_records: parseInt(document.getElementById('cfg-audit_history_max_records').value) || 500,
+      keep_compressed_image_in_temp: document.getElementById('cfg-keep_compressed_image_in_temp').checked,
+      debug_log_llm_response: document.getElementById('cfg-debug_log_llm_response').checked,
+    };
+    await window.AstrBotPluginPage.apiPost('/image_guard/audit/config/update', cfg);
+    document.getElementById('config-status').textContent = '✅ 已保存，插件重载中...';
+  } catch (e) {
+    document.getElementById('config-status').textContent = '❌ 保存失败: ' + (e.message || e);
+  }
+}
+
+/* ── 工具函数 ── */
+function listToLines(arr) { return Array.isArray(arr) ? arr.join('\n') : ''; }
+function linesToList(str) { return str.split('\n').map(s => s.trim()).filter(Boolean); }
+function setTextarea(id, val) { document.getElementById(id).value = val || ''; }
+function setValue(id, val) { document.getElementById(id).value = val || ''; }
+function setNumber(id, val) { document.getElementById(id).value = val != null ? val : ''; }
+function setCheck(id, val) { document.getElementById(id).checked = !!val; }
+function setSelect(id, val) { document.getElementById(id).value = val || ''; }
 
 function escHtml(s) {
   if (!s) return '';
