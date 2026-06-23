@@ -2,6 +2,7 @@ import httpx
 import re
 import random
 import json
+from datetime import datetime
 from pathlib import Path
 from .image_processor import prepare_audit_images
 from astrbot.api.event import filter, AstrMessageEvent
@@ -14,6 +15,26 @@ class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+
+        # ── 审核历史 API ──
+        context.register_web_api(
+            "/image_guard/audit/list",
+            self._api_audit_list,
+            ["GET"],
+            "获取审核记录列表",
+        )
+        context.register_web_api(
+            "/image_guard/audit/clear",
+            self._api_audit_clear,
+            ["POST", "DELETE"],
+            "清空审核记录",
+        )
+        context.register_web_api(
+            "/image_guard/audit/delete",
+            self._api_audit_delete,
+            ["POST", "DELETE"],
+            "删除单条审核记录",
+        )
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -334,6 +355,15 @@ class ImageGuard(Star):
             except Exception as e:
                 logger.error(f"[ImageGuard] Report failed: {e}")
 
+        # D. 保存审核记录
+        try:
+            await self._save_audit_record(
+                event, violation_img_url, reason,
+                recalled, banned, duration, is_group,
+            )
+        except Exception as e:
+            logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
+
     def _get_report_target(self, group_id: str | None, is_group: bool):
         if is_group and group_id:
             for entry in self.config.get("group_report_targets", []):
@@ -363,3 +393,51 @@ class ImageGuard(Star):
             return "private", int(str(report_target).strip())
 
         return None
+
+    # ── 审核历史 ────────────────────────────────────────────────
+
+    async def _save_audit_record(self, event, image_url, reason, recalled, banned, duration, is_group):
+        record = {
+            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "user_id": event.get_sender_id() or "",
+            "user_name": event.get_sender_name() or "",
+            "group_id": event.get_group_id() or "",
+            "image_url": image_url,
+            "reason": reason,
+            "recalled": recalled,
+            "banned": banned,
+            "ban_duration": duration,
+            "is_group": is_group,
+        }
+        records = await self.get_kv_data("audit_history", [])
+        if not isinstance(records, list):
+            records = []
+        records.append(record)
+        # 最多保留 N 条
+        max_records = int(self.config.get("audit_history_max_records", 500))
+        if max_records > 0 and len(records) > max_records:
+            records = records[-max_records:]
+        await self.put_kv_data("audit_history", records)
+
+    async def _api_audit_list(self):
+        records = await self.get_kv_data("audit_history", [])
+        if not isinstance(records, list):
+            records = []
+        return {"data": records}
+
+    async def _api_audit_clear(self):
+        await self.put_kv_data("audit_history", [])
+        return {"message": "ok"}
+
+    async def _api_audit_delete(self):
+        from flask import request
+        record_id = request.args.get("id") or request.json.get("id") if request.is_json else None
+        if not record_id:
+            return {"message": "missing id"}, 400
+        records = await self.get_kv_data("audit_history", [])
+        if not isinstance(records, list):
+            records = []
+        records = [r for r in records if r.get("id") != record_id]
+        await self.put_kv_data("audit_history", records)
+        return {"message": "ok"}

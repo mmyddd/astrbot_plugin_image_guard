@@ -190,6 +190,11 @@
       }
     }
   },
+  "audit_history_max_records": {
+    "description": "审核历史最大保留条数。超出时自动删除最早的记录。设为 0 则不保留历史。",
+    "type": "int",
+    "default": 500
+  },
   "enable_recall": {
     "description": "是否撤回违规图片",
     "type": "bool",

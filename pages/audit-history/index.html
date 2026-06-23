@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>审核记录</title>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --card: #fff;
+    --border: #e0e0e0;
+    --text: #333;
+    --text-secondary: #888;
+    --primary: #1976d2;
+    --danger: #d32f2f;
+    --success: #2e7d32;
+    --warn-bg: #fff3e0;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header-actions { display: flex; gap: 8px; }
+  .btn {
+    padding: 6px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+    cursor: pointer; font-size: 13px; background: var(--card); color: var(--text);
+    transition: all .15s; white-space: nowrap;
+  }
+  .btn:hover { opacity: .8; }
+  .btn-danger { color: var(--danger); border-color: var(--danger); }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+  .btn-primary { color: var(--primary); border-color: var(--primary); }
+  .btn-primary:hover { background: var(--primary); color: #fff; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  .stats {
+    display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 20px; flex: 1; min-width: 120px;
+  }
+  .stat-card .num { font-size: 24px; font-weight: 700; }
+  .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+  table {
+    width: 100%; border-collapse: collapse; background: var(--card);
+    border-radius: var(--radius); overflow: hidden; font-size: 13px;
+  }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: #fafafa; font-weight: 600; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+  .empty { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
+
+  .image-thumb {
+    width: 60px; height: 60px; object-fit: cover; border-radius: 4px;
+    cursor: pointer; border: 1px solid var(--border); transition: transform .15s;
+  }
+  .image-thumb:hover { transform: scale(1.1); }
+  .tag {
+    display: inline-block; padding: 2px 6px; border-radius: 3px;
+    font-size: 11px; font-weight: 500;
+  }
+  .tag-success { background: #e8f5e9; color: var(--success); }
+  .tag-fail { background: #ffebee; color: var(--danger); }
+  .tag-muted { background: #f5f5f5; color: var(--text-secondary); }
+  .reason-text { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* lightbox */
+  .lightbox {
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,.85); justify-content: center; align-items: center;
+    cursor: zoom-out;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 4px; }
+
+  /* pagination */
+  .pagination {
+    display: flex; justify-content: center; align-items: center; gap: 8px;
+    margin-top: 16px; font-size: 13px;
+  }
+  .pagination .btn:disabled { opacity: .3; cursor: default; }
+
+  @media (max-width: 600px) {
+    table { font-size: 12px; }
+    th, td { padding: 6px 8px; }
+    .image-thumb { width: 40px; height: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🕵️ 审核记录</h1>
+  <div class="header-actions">
+    <button class="btn btn-primary btn-sm" onclick="refresh()">🔄 刷新</button>
+    <button class="btn btn-danger btn-sm" onclick="clearAll()">🗑️ 清空</button>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">总记录</div></div>
+  <div class="stat-card"><div class="num" id="stat-recalled">0</div><div class="label">已撤回</div></div>
+  <div class="stat-card"><div class="num" id="stat-banned">0</div><div class="label">已禁言</div></div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>时间</th>
+      <th>用户</th>
+      <th>来源</th>
+      <th>理由</th>
+      <th>图片</th>
+      <th>撤回</th>
+      <th>禁言</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody id="tbody">
+    <tr><td colspan="8" class="empty">加载中...</td></tr>
+  </tbody>
+</table>
+
+<div class="pagination" id="pagination"></div>
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="违规图片预览">
+</div>
+
+<script>
+const PAGE_SIZE = 15;
+let allRecords = [];
+let currentPage = 1;
+
+function ready(fn) {
+  if (window.AstrBotPluginPage) {
+    window.AstrBotPluginPage.ready().then(fn);
+  } else {
+    document.addEventListener('DOMContentLoaded', fn);
+  }
+}
+
+ready(async () => {
+  await loadRecords();
+});
+
+async function loadRecords() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中...</td></tr>';
+  try {
+    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/list');
+    allRecords = (res.data || []).reverse(); // 最新的在前面
+    render();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">加载失败: ${e.message || e}</td></tr>`;
+  }
+}
+
+function render() {
+  document.getElementById('stat-total').textContent = allRecords.length;
+  document.getElementById('stat-recalled').textContent = allRecords.filter(r => r.recalled).length;
+  document.getElementById('stat-banned').textContent = allRecords.filter(r => r.banned).length;
+
+  const totalPages = Math.max(1, Math.ceil(allRecords.length / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const page = allRecords.slice(start, start + PAGE_SIZE);
+  const tbody = document.getElementById('tbody');
+
+  if (page.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无审核记录</td></tr>';
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = page.map(r => {
+    const time = r.time || r.timestamp || '-';
+    const user = r.user_name || r.user_id || '-';
+    const userId = r.user_id || '';
+    const group = r.group_id ? `群 ${r.group_id}` : '私聊';
+    const reason = r.reason || '-';
+    const imgHtml = r.image_url
+      ? `<img class="image-thumb" src="${escHtml(r.image_url)}" onclick="preview('${escHtml(r.image_url)}')" alt="违规图片">`
+      : '-';
+    const recallTag = r.recalled
+      ? '<span class="tag tag-success">✅ 已撤回</span>'
+      : '<span class="tag tag-fail">❌ 失败</span>';
+    const banTag = r.banned
+      ? '<span class="tag tag-success">✅ 已禁言</span>'
+      : r.banned === false && r.ban_duration > 0
+        ? '<span class="tag tag-fail">❌ 失败</span>'
+        : '<span class="tag tag-muted">—</span>';
+    return `<tr>
+      <td style="white-space:nowrap;font-size:12px;">${escHtml(time)}</td>
+      <td class="user-cell" title="${escHtml(userId)}">${escHtml(user)}</td>
+      <td style="font-size:12px;">${escHtml(group)}</td>
+      <td><div class="reason-text" title="${escHtml(reason)}">${escHtml(reason)}</div></td>
+      <td>${imgHtml}</td>
+      <td>${recallTag}</td>
+      <td>${banTag}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteRecord('${escHtml(r.id)}')">删除</button></td>
+    </tr>`;
+  }).join('');
+
+  // Pagination
+  const pg = document.getElementById('pagination');
+  pg.innerHTML = `
+    <button class="btn btn-sm" onclick="goPage(1)" ${currentPage <= 1 ? 'disabled' : ''}>首页</button>
+    <button class="btn btn-sm" onclick="goPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>上一页</button>
+    <span>${currentPage} / ${totalPages}</span>
+    <button class="btn btn-sm" onclick="goPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>下一页</button>
+    <button class="btn btn-sm" onclick="goPage(${totalPages})" ${currentPage >= totalPages ? 'disabled' : ''}>末页</button>
+  `;
+}
+
+function goPage(p) {
+  currentPage = p;
+  render();
+}
+
+function refresh() { currentPage = 1; loadRecords(); }
+
+async function clearAll() {
+  if (!confirm('确定清空所有审核记录？')) return;
+  try {
+    await window.AstrBotPluginPage.apiPost('/image_guard/audit/clear', { _method: 'DELETE' });
+    allRecords = [];
+    currentPage = 1;
+    render();
+  } catch (e) {
+    alert('清空失败: ' + (e.message || e));
+  }
+}
+
+async function deleteRecord(id) {
+  if (!confirm('确定删除此记录？')) return;
+  try {
+    await window.AstrBotPluginPage.apiPost('/image_guard/audit/delete', { id });
+    allRecords = allRecords.filter(r => r.id !== id);
+    render();
+  } catch (e) {
+    alert('删除失败: ' + (e.message || e));
+  }
+}
+
+function preview(url) {
+  document.getElementById('lightbox-img').src = url;
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
