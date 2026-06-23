@@ -35,12 +35,6 @@ class ImageGuard(Star):
             ["POST", "DELETE"],
             "删除单条审核记录",
         )
-        context.register_web_api(
-            "/image_guard/audit/provider_stats",
-            self._api_audit_provider_stats,
-            ["GET"],
-            "获取供应商调用统计",
-        )
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -443,17 +437,14 @@ class ImageGuard(Star):
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
             records = []
-        return {"data": records}
+        stats = await self.get_kv_data("provider_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+        return {"data": records, "provider_stats": stats}
 
     async def _api_audit_clear(self):
         await self.put_kv_data("audit_history", [])
         return {"message": "ok"}
-
-    async def _api_audit_provider_stats(self):
-        stats = await self.get_kv_data("provider_stats", {})
-        if not isinstance(stats, dict):
-            stats = {}
-        return {"data": stats}
 
     async def _api_audit_delete(self):
         from flask import request

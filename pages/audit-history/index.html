@@ -172,33 +172,8 @@ function ready(fn) {
 }
 
 ready(async () => {
-  await loadStats();
   await loadRecords();
 });
-
-async function loadStats() {
-  try {
-    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/provider_stats');
-    const stats = res.data || {};
-    const keys = Object.keys(stats);
-    const container = document.getElementById('provider-stats');
-    if (keys.length === 0) {
-      container.innerHTML = '<span style="font-size:12px;color:var(--text-secondary);">暂无数据</span>';
-      return;
-    }
-    const maxVal = Math.max(...Object.values(stats), 1);
-    container.innerHTML = keys.map(k => {
-      const pct = (stats[k] / maxVal * 100).toFixed(0);
-      return `<div class="provider-bar-wrap">
-        <span class="name" title="${escHtml(k)}">${escHtml(k)}</span>
-        <div class="provider-bar"><div class="provider-bar-fill" style="width:${pct}%"></div></div>
-        <span class="count">${stats[k]}</span>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    document.getElementById('provider-stats').innerHTML = '<span style="font-size:12px;color:var(--danger);">加载失败</span>';
-  }
-}
 
 async function loadRecords() {
   const tbody = document.getElementById('tbody');
@@ -206,10 +181,30 @@ async function loadRecords() {
   try {
     const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/list');
     allRecords = (res.data || []).reverse(); // 最新的在前面
+    renderStats(res.provider_stats);
     render();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">加载失败: ${e.message || e}</td></tr>`;
   }
+}
+
+function renderStats(stats) {
+  stats = stats || {};
+  const keys = Object.keys(stats);
+  const container = document.getElementById('provider-stats');
+  if (keys.length === 0) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--text-secondary);">暂无数据</span>';
+    return;
+  }
+  const maxVal = Math.max(...Object.values(stats), 1);
+  container.innerHTML = keys.map(k => {
+    const pct = (stats[k] / maxVal * 100).toFixed(0);
+    return `<div class="provider-bar-wrap">
+        <span class="name" title="${escHtml(k)}">${escHtml(k)}</span>
+        <div class="provider-bar"><div class="provider-bar-fill" style="width:${pct}%"></div></div>
+        <span class="count">${stats[k]}</span>
+      </div>`;
+  }).join('');
 }
 
 function render() {
