@@ -155,6 +155,9 @@ class ImageGuard(Star):
                 "messages": messages,
                 "max_tokens": int(self.config.get("llm_max_tokens", 512))
             }
+            reasoning_effort = self.config.get("reasoning_effort", "")
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             resp = await client.post(
                 f"{base_url.rstrip('/')}/v1/chat/completions",
                 json=payload,

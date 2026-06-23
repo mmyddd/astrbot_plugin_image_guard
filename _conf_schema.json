@@ -2,14 +2,26 @@
   "group_scope": {
     "description": "启用审查的群号列表。若包含 \"0\" 则监听所有群。若留空则不启用。",
     "type": "list",
-    "default": ["0"],
-    "items": { "type": "string" }
+    "default": [
+      "0"
+    ],
+    "items": {
+      "type": "string"
+    }
   },
   "private_scope": {
     "description": "启用审查的私聊用户(QQ)列表。若包含 \"0\" 则监听所有私聊。若留空则不启用。",
     "type": "list",
     "default": [],
-    "items": { "type": "string" }
+    "items": {
+      "type": "string"
+    }
+  },
+  "reasoning_effort": {
+    "description": "设置 LLM API 请求中的 reasoning_effort 参数（如 DeepSeek 模型支持 low/medium/high）。用于控制模型推理深度：low=快速低消耗，medium=适中，high=深度推理更严谨。设为空字符串则不传递此参数（兼容不支持此参数的模型）。",
+    "type": "string",
+    "default": "",
+    "hint": "可选值: 留空(不启用) / low / medium / high"
   },
   "llm_model": {
     "description": "API1 模型名（优先使用）",
@@ -164,14 +176,24 @@
   "sensitive_texts": {
     "description": "图片中禁止出现的敏感文字列表（OCR）",
     "type": "list",
-    "default": ["违禁词A", "违禁词B"],
-    "items": { "type": "string" }
+    "default": [
+      "违禁词A",
+      "违禁词B"
+    ],
+    "items": {
+      "type": "string"
+    }
   },
   "forbidden_descriptions": {
     "description": "禁止出现的图片画面描述（语义检测，如：东亚地图、涩图）",
     "type": "list",
-    "default": ["东亚地图", "裸露画面"],
-    "items": { "type": "string" }
+    "default": [
+      "东亚地图",
+      "裸露画面"
+    ],
+    "items": {
+      "type": "string"
+    }
   },
   "ban_duration": {
     "description": "违规禁言时长（秒），0为不禁言",
@@ -187,7 +209,9 @@
     "description": "群聊违规上报接收人映射。格式为 \"来源群号:private:接收人QQ\" 或 \"来源群号:group:接收群号\"。旧格式 \"来源群号:接收人QQ\" 仍按私聊处理；未匹配时回退到 report_target_id。",
     "type": "list",
     "default": [],
-    "items": { "type": "string" }
+    "items": {
+      "type": "string"
+    }
   },
   "enable_recall": {
     "description": "是否撤回违规图片",
