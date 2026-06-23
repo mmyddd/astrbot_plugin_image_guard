@@ -330,6 +330,7 @@
 const PAGE_SIZE = 15;
 let allRecords = [];
 let currentPage = 1;
+let fullConfig = {};
 
 /* ── 自定义弹窗（绕过 iframe sandbox）── */
 function showDialog(msg, buttons) {
@@ -534,7 +535,8 @@ async function loadConfig() {
   document.getElementById('config-status').textContent = '加载中...';
   try {
     const res = await window.AstrBotPluginPage.apiGet('audit/config');
-    const cfg = res || {};
+    fullConfig = res || {};
+    const cfg = fullConfig;
     setTextarea('cfg-sensitive_texts', listToLines(cfg.sensitive_texts));
     setTextarea('cfg-forbidden_descriptions', listToLines(cfg.forbidden_descriptions));
     setTextarea('cfg-custom_vision_prompt', cfg.custom_vision_prompt || '');
@@ -569,7 +571,7 @@ async function saveConfig() {
   if (!(await showConfirm('保存配置后将重载插件，确定继续？'))) return;
   document.getElementById('config-status').textContent = '保存中...';
   try {
-    const cfg = {
+    const cfg = Object.assign({}, fullConfig, {
       sensitive_texts: linesToList(document.getElementById('cfg-sensitive_texts').value),
       forbidden_descriptions: linesToList(document.getElementById('cfg-forbidden_descriptions').value),
       custom_vision_prompt: document.getElementById('cfg-custom_vision_prompt').value,
@@ -586,7 +588,7 @@ async function saveConfig() {
       audit_history_max_records: parseInt(document.getElementById('cfg-audit_history_max_records').value) || 500,
       keep_compressed_image_in_temp: document.getElementById('cfg-keep_compressed_image_in_temp').checked,
       debug_log_llm_response: document.getElementById('cfg-debug_log_llm_response').checked,
-    };
+    });
     await window.AstrBotPluginPage.apiPost('audit/config/update', cfg);
     document.getElementById('config-status').textContent = '✅ 已保存，插件重载中...';
   } catch (e) {
