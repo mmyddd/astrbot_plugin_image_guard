@@ -335,7 +335,7 @@ async function loadRecords() {
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中...</td></tr>';
   try {
-    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/list');
+    const res = await window.AstrBotPluginPage.apiGet('audit/list');
     allRecords = (res.data || []).reverse();
     renderStats(res.provider_stats);
     render();
@@ -426,7 +426,7 @@ function refresh() { currentPage = 1; loadRecords(); }
 async function clearAll() {
   if (!confirm('确定清空所有审核记录？')) return;
   try {
-    await window.AstrBotPluginPage.apiPost('/image_guard/audit/clear', { _method: 'DELETE' });
+    await window.AstrBotPluginPage.apiPost('audit/clear', { _method: 'DELETE' });
     allRecords = []; currentPage = 1; render();
   } catch (e) { alert('清空失败: ' + (e.message || e)); }
 }
@@ -434,7 +434,7 @@ async function clearAll() {
 async function deleteRecord(id) {
   if (!confirm('确定删除此记录？')) return;
   try {
-    await window.AstrBotPluginPage.apiPost('/image_guard/audit/delete', { id });
+    await window.AstrBotPluginPage.apiPost('audit/delete', { id });
     allRecords = allRecords.filter(r => r.id !== id); render();
   } catch (e) { alert('删除失败: ' + (e.message || e)); }
 }
@@ -454,7 +454,7 @@ function closeLightbox() {
 async function loadConfig() {
   document.getElementById('config-status').textContent = '加载中...';
   try {
-    const res = await window.AstrBotPluginPage.apiGet('/image_guard/audit/config');
+    const res = await window.AstrBotPluginPage.apiGet('audit/config');
     const cfg = res.data || {};
     setTextarea('cfg-sensitive_texts', listToLines(cfg.sensitive_texts));
     setTextarea('cfg-forbidden_descriptions', listToLines(cfg.forbidden_descriptions));
@@ -508,7 +508,7 @@ async function saveConfig() {
       keep_compressed_image_in_temp: document.getElementById('cfg-keep_compressed_image_in_temp').checked,
       debug_log_llm_response: document.getElementById('cfg-debug_log_llm_response').checked,
     };
-    await window.AstrBotPluginPage.apiPost('/image_guard/audit/config/update', cfg);
+    await window.AstrBotPluginPage.apiPost('audit/config/update', cfg);
     document.getElementById('config-status').textContent = '✅ 已保存，插件重载中...';
   } catch (e) {
     document.getElementById('config-status').textContent = '❌ 保存失败: ' + (e.message || e);
