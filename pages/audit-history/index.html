@@ -123,6 +123,21 @@
     .config-row { flex-direction: column; gap: 4px; }
     .config-row label { min-width: auto; }
   }
+
+  /* ── 自定义弹窗（绕过 iframe sandbox 限制）── */
+  .dialog-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999; opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  .dialog-overlay.open { opacity: 1; pointer-events: auto; }
+  .dialog-box {
+    background: var(--card); border-radius: var(--radius);
+    padding: 20px 24px; min-width: 280px; max-width: 420px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  }
+  .dialog-message { font-size: 14px; margin-bottom: 18px; line-height: 1.5; color: var(--text); }
+  .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 </style>
 </head>
 <body>
@@ -287,13 +302,48 @@
 </div>
 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
-  <img id="lightbox-img" src="" alt="违规图片预览">
+  <img id="lightbox-img" src="" alt="\u8fdd\u89c4\u56fe\u7247\u9884\u89c8">
+</div>
+
+<!-- 自定义确认弹窗 -->
+<div class="dialog-overlay" id="dialog-overlay">
+  <div class="dialog-box">
+    <div class="dialog-message" id="dialog-msg"></div>
+    <div class="dialog-buttons" id="dialog-btns"></div>
+  </div>
 </div>
 
 <script>
 const PAGE_SIZE = 15;
 let allRecords = [];
 let currentPage = 1;
+
+/* ── 自定义弹窗（绕过 iframe sandbox）── */
+function showDialog(msg, buttons) {
+  return new Promise(resolve => {
+    document.getElementById('dialog-msg').textContent = msg;
+    const btns = document.getElementById('dialog-btns');
+    btns.innerHTML = buttons.map((b, i) =>
+      `<button class="btn ${b.cls || ''}" data-idx="${i}">${b.text}</button>`
+    ).join('');
+    btns.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('dialog-overlay').classList.remove('open');
+        resolve(buttons[btn.dataset.idx].value);
+      }, { once: true });
+    });
+    document.getElementById('dialog-overlay').classList.add('open');
+  });
+}
+function showAlert(msg) {
+  return showDialog(msg, [{ text: '确定', value: undefined, cls: 'btn-primary' }]);
+}
+function showConfirm(msg) {
+  return showDialog(msg, [
+    { text: '取消', value: false },
+    { text: '确定', value: true, cls: 'btn-danger' }
+  ]);
+}
 
 function ready(fn) {
   if (window.AstrBotPluginPage) {
@@ -430,19 +480,19 @@ function goPage(p) { currentPage = p; render(); }
 function refresh() { currentPage = 1; loadRecords(); }
 
 async function clearAll() {
-  if (!confirm('确定清空所有审核记录？')) return;
+  if (!(await showConfirm('确定清空所有审核记录？'))) return;
   try {
     await window.AstrBotPluginPage.apiPost('audit/clear', { _method: 'DELETE' });
     allRecords = []; currentPage = 1; render();
-  } catch (e) { alert('清空失败: ' + (e.message || e)); }
+  } catch (e) { await showAlert('清空失败: ' + (e.message || e)); }
 }
 
 async function deleteRecord(id) {
-  if (!confirm('确定删除此记录？')) return;
+  if (!(await showConfirm('确定删除此记录？'))) return;
   try {
     await window.AstrBotPluginPage.apiPost('audit/delete', { id });
     allRecords = allRecords.filter(r => r.id !== id); render();
-  } catch (e) { alert('删除失败: ' + (e.message || e)); }
+  } catch (e) { await showAlert('删除失败: ' + (e.message || e)); }
 }
 
 function preview(url) {
@@ -493,7 +543,7 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-  if (!confirm('保存配置后将重载插件，确定继续？')) return;
+  if (!(await showConfirm('保存配置后将重载插件，确定继续？'))) return;
   document.getElementById('config-status').textContent = '保存中...';
   try {
     const cfg = {
