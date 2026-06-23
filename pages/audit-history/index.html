@@ -16,6 +16,16 @@
     --success: #2e7d32;
     --radius: 8px;
   }
+  [data-theme="dark"] {
+    --bg: #1a1a2e;
+    --card: #222244;
+    --border: #3a3a5a;
+    --text: #e0e0e0;
+    --text-secondary: #999;
+    --primary: #5b9cf5;
+    --danger: #f07373;
+    --success: #5cbb6b;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -67,12 +77,12 @@
   .provider-bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .provider-bar-wrap .name { font-size: 12px; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .provider-bar-wrap .count { font-size: 11px; color: var(--text-secondary); min-width: 36px; text-align: right; }
-  .provider-bar { flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+  .provider-bar { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
   .provider-bar-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width .3s; }
 
   table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: var(--radius); overflow: hidden; font-size: 13px; }
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-  th { background: #fafafa; font-weight: 600; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+  th { background: var(--bg); font-weight: 600; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
   .empty { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
 
   .image-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); transition: transform .15s; }
@@ -81,6 +91,9 @@
   .tag-success { background: #e8f5e9; color: var(--success); }
   .tag-fail { background: #ffebee; color: var(--danger); }
   .tag-muted { background: #f5f5f5; color: var(--text-secondary); }
+  [data-theme="dark"] .tag-success { background: #14301a; }
+  [data-theme="dark"] .tag-fail { background: #3a1a1a; }
+  [data-theme="dark"] .tag-muted { background: var(--card); }
   .reason-text { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .user-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -347,10 +360,20 @@ function showConfirm(msg) {
 
 function ready(fn) {
   if (window.AstrBotPluginPage) {
-    window.AstrBotPluginPage.ready().then(fn);
+    window.AstrBotPluginPage.ready().then(ctx => {
+      applyTheme(ctx.isDark);
+      window.AstrBotPluginPage.onContextChange(newCtx => {
+        applyTheme(newCtx.isDark);
+      });
+      fn(ctx);
+    });
   } else {
     document.addEventListener('DOMContentLoaded', fn);
   }
+}
+
+function applyTheme(isDark) {
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
 }
 
 ready(async () => {
