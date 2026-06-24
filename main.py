@@ -5,7 +5,7 @@ import json
 import base64
 from datetime import datetime
 from pathlib import Path
-from .image_processor import prepare_audit_images
+from .image_processor import prepare_audit_images, compress_image_to_data_url
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -90,6 +90,7 @@ class ImageGuard(Star):
         if not message_obj.message: return
 
         image_urls = []
+        max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
         for component in message_obj.message:
             if isinstance(component, Image):
                 # v4.26+ 图片已被 preprocess 统一转为本地文件
@@ -101,14 +102,13 @@ class ImageGuard(Star):
                     if not path.exists():
                         logger.warning(f"[ImageGuard] 图片文件不存在: {path}")
                         continue
-                    data = path.read_bytes()
                     suffix = path.suffix.lower()
                     if suffix == ".gif":
                         continue
-                    encoded = base64.b64encode(data).decode("ascii")
-                    mime = {".png": "image/png", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/jpeg")
-                    image_urls.append(f"data:{mime};base64,{encoded}")
-                    logger.info(f"[ImageGuard] 本地图片转 data URL: {path} ({len(data)} bytes)")
+                    # 直接压缩本地文件（与 HTTP URL 下载后压缩路径一致）
+                    compressed = compress_image_to_data_url(path.read_bytes(), max_image_bytes)
+                    image_urls.append(compressed)
+                    logger.info(f"[ImageGuard] 本地图片压缩: {path} → data URL ({len(compressed)} chars)")
                 except Exception as e:
                     logger.warning(f"[ImageGuard] 读取本地图片失败: {e}")
 
@@ -142,7 +142,6 @@ class ImageGuard(Star):
         )
 
         try:
-            max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
             keep_compressed_image_in_temp = bool(
                 self.config.get("keep_compressed_image_in_temp", False)
             )
