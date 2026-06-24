@@ -486,7 +486,8 @@ class ImageGuard(Star):
 
     async def _api_audit_image(self):
         """返回本地存储的审核图片"""
-        from quart import request, send_file
+        from quart import request
+        from quart.wrappers import Response
         record_id = request.args.get("id")
         if not record_id:
             return {"message": "missing id"}, 400
@@ -505,9 +506,10 @@ class ImageGuard(Star):
                         mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                                     ".png": "image/png", ".gif": "image/gif",
                                     ".webp": "image/webp", ".bmp": "image/bmp"}
-                        mimetype = mime_map.get(suffix, "image/jpeg")
-                        logger.info(f"[ImageGuard] 返回本地图片: {path} ({path.stat().st_size} bytes, {mimetype})")
-                        return await send_file(str(path), mimetype=mimetype)
+                        mimetype = mime_map.get(suffix, "application/octet-stream")
+                        data = path.read_bytes()
+                        logger.info(f"[ImageGuard] 返回本地图片: {path} ({len(data)} bytes, {mimetype})")
+                        return Response(data, mimetype=mimetype)
                     else:
                         logger.warning(f"[ImageGuard] 图片文件不存在: {local_image}")
                 break
