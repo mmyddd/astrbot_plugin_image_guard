@@ -49,12 +49,6 @@ class ImageGuard(Star):
             ["POST"],
             "更新插件配置并重载",
         )
-        context.register_web_api(
-            "/astrbot_plugin_image_guard/audit/image",
-            self._api_audit_image,
-            ["GET"],
-            "获取审核记录图片",
-        )
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -523,13 +517,20 @@ class ImageGuard(Star):
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
-        # 为有本地缓存的记录补充 local_image_url 和文件大小
+        # 为有本地缓存的记录生成 file_token 下载链接（绕过 /api/plug 的 JWT 认证）
+        from astrbot.core import file_token_service
         for r in records:
             if r.get("local_image"):
-                r["local_image_url"] = f"/api/plug/astrbot_plugin_image_guard/audit/image?id={r['id']}"
                 path = Path(r["local_image"])
+                if not path.exists():
+                    path = Path(r["local_image"]).resolve()
                 if path.exists():
                     r["local_image_size"] = path.stat().st_size
+                    try:
+                        token = await file_token_service.register_file(str(path), timeout=86400)
+                        r["local_image_url"] = f"/api/file/{token}"
+                    except Exception as e:
+                        logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
         return {"records": records, "provider_stats": stats}
 
     async def _api_audit_clear(self):
