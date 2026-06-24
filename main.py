@@ -10,6 +10,8 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain
 
+AUDIT_IMAGE_DIR = Path("data") / "plugin_data" / "image_guard" / "audit_images"
+
 @register("image_guard", "YEZI", "图片内容审查卫士", "1.7.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
@@ -46,6 +48,12 @@ class ImageGuard(Star):
             self._api_audit_config_update,
             ["POST"],
             "更新插件配置并重载",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/image",
+            self._api_audit_image,
+            ["GET"],
+            "获取审核记录图片",
         )
 
     # ── 消息处理入口 ────────────────────────────────────────────
@@ -427,6 +435,11 @@ class ImageGuard(Star):
             "ban_duration": duration,
             "is_group": is_group,
         }
+        # 下载原始图片到本地持久化存储（避免 QQ 图片 URL 过期）
+        if image_url and not image_url.startswith("data:"):
+            local_path = await self._download_and_save_image(image_url, record["id"])
+            if local_path:
+                record["local_image"] = local_path
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
             records = []
@@ -445,6 +458,47 @@ class ImageGuard(Star):
         stats[provider_name] = stats.get(provider_name, 0) + 1
         await self.put_kv_data("provider_stats", stats)
 
+    async def _download_and_save_image(self, image_url: str, record_id: str):
+        """下载原始图片并保存到持久化目录，返回本地路径或 None"""
+        try:
+            AUDIT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                response = await client.get(image_url)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                ext = ".jpg"
+                if "png" in content_type:
+                    ext = ".png"
+                elif "gif" in content_type:
+                    ext = ".gif"
+                elif "webp" in content_type:
+                    ext = ".webp"
+                file_path = AUDIT_IMAGE_DIR / f"{record_id}{ext}"
+                file_path.write_bytes(response.content)
+                return str(file_path)
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 下载审核图片失败: {e}")
+            return None
+
+    async def _api_audit_image(self):
+        """返回本地存储的审核图片"""
+        from quart import request, send_file
+        record_id = request.args.get("id")
+        if not record_id:
+            return {"message": "missing id"}, 400
+        records = await self.get_kv_data("audit_history", [])
+        if not isinstance(records, list):
+            records = []
+        for r in records:
+            if r.get("id") == record_id:
+                local_image = r.get("local_image")
+                if local_image:
+                    path = Path(local_image)
+                    if path.exists():
+                        return await send_file(path)
+                break
+        return {"message": "image not found"}, 404
+
     async def _api_audit_list(self):
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
@@ -452,6 +506,13 @@ class ImageGuard(Star):
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
+        # 为有本地缓存的记录补充 local_image_url 和文件大小
+        for r in records:
+            if r.get("local_image"):
+                r["local_image_url"] = f"/api/plug/astrbot_plugin_image_guard/audit/image?id={r['id']}"
+                path = Path(r["local_image"])
+                if path.exists():
+                    r["local_image_size"] = path.stat().st_size
         return {"records": records, "provider_stats": stats}
 
     async def _api_audit_clear(self):

@@ -87,6 +87,7 @@
 
   .image-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); transition: transform .15s; }
   .image-thumb:hover { transform: scale(1.1); }
+  .img-size { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
   .tag { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 500; }
   .tag-success { background: #e8f5e9; color: var(--success); }
   .tag-fail { background: #ffebee; color: var(--danger); }
@@ -315,7 +316,7 @@
 </div>
 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
-  <img id="lightbox-img" src="" alt="\u8fdd\u89c4\u56fe\u7247\u9884\u89c8">
+  <img id="lightbox-img" src="" alt="违规图片预览">
 </div>
 
 <!-- 自定义确认弹窗 -->
@@ -461,8 +462,10 @@ function render() {
     const userId = r.user_id || '';
     const group = r.group_id ? `群 ${r.group_id}` : '私聊';
     const reason = r.reason || '-';
-    const imgHtml = r.image_url
-      ? `<img class="image-thumb" data-img="${escAttr(r.image_url)}" onclick="preview('${escAttr(r.image_url)}')" alt="\u8fdd\u89c4\u56fe\u7247">`
+    const imgUrl = r.local_image_url || r.image_url;
+    const sizeText = r.local_image_size ? formatBytes(r.local_image_size) : (imgUrl && !r.local_image_url ? '远程' : '');
+    const imgHtml = imgUrl
+      ? `<img class="image-thumb" data-img="${escAttr(imgUrl)}" onclick="preview('${escAttr(imgUrl)}')" alt="\u8fdd\u89c4\u56fe\u7247"><div class="img-size">${escHtml(sizeText)}</div>`
       : '-';
     const recallTag = r.recalled
       ? '<span class="tag tag-success">✅ 已撤回</span>'
@@ -614,6 +617,13 @@ function escAttr(s) {
   // 仅转义会破坏 HTML 属性边界的字符，保留 & 防止 URL 损坏
   if (!s) return '';
   return String(s).replace(/"/g, '&quot;');
+}
+
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(2) + ' MB';
 }
 </script>
 </body>
