@@ -17,6 +17,7 @@
     --radius: 8px;
   }
   [data-theme="dark"] {
+    color-scheme: dark;
     --bg: #1a1a2e;
     --card: #222244;
     --border: #3a3a5a;
@@ -32,14 +33,24 @@
     background: var(--bg);
     color: var(--text);
     padding: 16px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   }
 
   /* ── 标签栏 ── */
   .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
   .tab {
     padding: 8px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
-    color: var(--text-secondary); border-bottom: 2px solid transparent;
-    margin-bottom: -2px; transition: all .15s; user-select: none;
+    color: var(--text-secondary); background: transparent; border: none; border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: color .15s, border-color .15s; user-select: none;
+    font-family: inherit; line-height: inherit;
   }
   .tab:hover { color: var(--text); }
   .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
@@ -50,7 +61,7 @@
   .btn {
     padding: 6px 16px; border: 1px solid var(--border); border-radius: var(--radius);
     cursor: pointer; font-size: 13px; background: var(--card); color: var(--text);
-    transition: all .15s; white-space: nowrap;
+    transition: opacity .15s, background .15s; white-space: nowrap;
   }
   .btn:hover { opacity: .8; }
   .btn-danger { color: var(--danger); border-color: var(--danger); }
@@ -66,7 +77,7 @@
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 12px 20px; flex: 1; min-width: 120px;
   }
-  .stat-card .num { font-size: 24px; font-weight: 700; }
+  .stat-card .num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
   .provider-section {
@@ -143,6 +154,7 @@
     position: fixed; inset: 0; background: rgba(0,0,0,.35);
     display: flex; align-items: center; justify-content: center;
     z-index: 9999; opacity: 0; pointer-events: none; transition: opacity .2s;
+    overscroll-behavior: contain;
   }
   .dialog-overlay.open { opacity: 1; pointer-events: auto; }
   .dialog-box {
@@ -159,13 +171,13 @@
 <div class="header">
   <h1>🕵️ ImageGuard</h1>
   <div class="header-actions">
-    <button class="btn btn-primary btn-sm" onclick="refresh()">🔄 刷新</button>
+    <button class="btn btn-primary btn-sm" onclick="refresh()" aria-label="刷新审核记录">🔄 刷新</button>
   </div>
 </div>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('audit')" id="tab-audit">📋 审核记录</div>
-  <div class="tab" onclick="switchTab('config')" id="tab-config">⚙️ 配置</div>
+  <button class="tab active" onclick="switchTab('audit')" id="tab-audit" aria-label="查看审核记录">📋 审核记录</button>
+  <button class="tab" onclick="switchTab('config')" id="tab-config" aria-label="插件配置">⚙️ 配置</button>
 </div>
 
 <!-- ════ 审核记录面板 ════ -->
@@ -178,7 +190,7 @@
 
   <div class="provider-section">
     <div class="title">🤖 供应商调用统计</div>
-    <div id="provider-stats">加载中...</div>
+    <div id="provider-stats">加载中…</div>
   </div>
 
   <table>
@@ -194,7 +206,7 @@
         <th>操作</th>
       </tr>
     </thead>
-    <tbody id="tbody"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
+    <tbody id="tbody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
   </table>
 
   <div class="pagination" id="pagination"></div>
@@ -312,7 +324,7 @@
     <button class="btn" onclick="loadConfig()">↩️ 撤销</button>
     <button class="btn btn-success" onclick="saveConfig()">💾 保存配置</button>
   </div>
-  <div id="config-status" style="text-align:center;font-size:13px;margin-bottom:16px;"></div>
+  <div id="config-status" style="text-align:center;font-size:13px;margin-bottom:16px;" aria-live="polite"></div>
 </div>
 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
@@ -320,7 +332,7 @@
 </div>
 
 <!-- 自定义确认弹窗 -->
-<div class="dialog-overlay" id="dialog-overlay">
+<div class="dialog-overlay" id="dialog-overlay" role="dialog" aria-modal="true" aria-label="确认操作">
   <div class="dialog-box">
     <div class="dialog-message" id="dialog-msg"></div>
     <div class="dialog-buttons" id="dialog-btns"></div>
@@ -334,8 +346,12 @@ let currentPage = 1;
 let fullConfig = {};
 
 /* ── 自定义弹窗（绕过 iframe sandbox）── */
+let _activeDialogResolve = null;
 function showDialog(msg, buttons) {
+  // 先清理上一个未完成的弹窗
+  if (_activeDialogResolve) { _activeDialogResolve(false); _activeDialogResolve = null; }
   return new Promise(resolve => {
+    _activeDialogResolve = resolve;
     document.getElementById('dialog-msg').textContent = msg;
     const btns = document.getElementById('dialog-btns');
     btns.innerHTML = buttons.map((b, i) =>
@@ -344,6 +360,7 @@ function showDialog(msg, buttons) {
     btns.querySelectorAll('button').forEach(btn => {
       btn.addEventListener('click', () => {
         document.getElementById('dialog-overlay').classList.remove('open');
+        _activeDialogResolve = null;
         resolve(buttons[btn.dataset.idx].value);
       }, { once: true });
     });
@@ -408,7 +425,7 @@ function openPluginConfig() {
 
 async function loadRecords() {
   const tbody = document.getElementById('tbody');
-  tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" class="empty">加载中…</td></tr>';
   try {
     const res = await window.AstrBotPluginPage.apiGet('audit/list');
     allRecords = (res.records || []).reverse();
@@ -465,7 +482,7 @@ function render() {
     const imgUrl = r.local_image_url || r.image_url;
     const sizeText = r.local_image_size ? formatBytes(r.local_image_size) : (imgUrl && !r.local_image_url ? '远程' : '');
     const imgHtml = imgUrl
-      ? `<img class="image-thumb" data-img="${escAttr(imgUrl)}" onclick="preview('${escAttr(imgUrl)}')" alt="\u8fdd\u89c4\u56fe\u7247"><div class="img-size">${escHtml(sizeText)}</div>`
+      ? `<img class="image-thumb" data-img="${escAttr(imgUrl)}" onclick="preview('${escAttr(imgUrl)}')" alt="\u8fdd\u89c4\u56fe\u7247" loading="lazy"><div class="img-size">${escHtml(sizeText)}</div>`
       : '-';
     const recallTag = r.recalled
       ? '<span class="tag tag-success">✅ 已撤回</span>'
@@ -529,13 +546,23 @@ function preview(url) {
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('open');
 }
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeLightbox();
+    if (_activeDialogResolve) {
+      _activeDialogResolve(false);
+      _activeDialogResolve = null;
+      document.getElementById('dialog-overlay').classList.remove('open');
+    }
+  }
+});
 
 /* ══════════════════════════════════════════════
    配置编辑
    ══════════════════════════════════════════════ */
 
 async function loadConfig() {
-  document.getElementById('config-status').textContent = '加载中...';
+  document.getElementById('config-status').textContent = '加载中…';
   try {
     const res = await window.AstrBotPluginPage.apiGet('audit/config');
     fullConfig = res || {};
@@ -572,7 +599,7 @@ async function loadConfig() {
 
 async function saveConfig() {
   if (!(await showConfirm('保存配置后将重载插件，确定继续？'))) return;
-  document.getElementById('config-status').textContent = '保存中...';
+  document.getElementById('config-status').textContent = '保存中…';
   try {
     const cfg = Object.assign({}, fullConfig, {
       sensitive_texts: linesToList(document.getElementById('cfg-sensitive_texts').value),
@@ -593,7 +620,7 @@ async function saveConfig() {
       debug_log_llm_response: document.getElementById('cfg-debug_log_llm_response').checked,
     });
     await window.AstrBotPluginPage.apiPost('audit/config/update', cfg);
-    document.getElementById('config-status').textContent = '✅ 已保存，插件重载中...';
+    document.getElementById('config-status').textContent = '✅ 已保存，插件重载中…';
   } catch (e) {
     document.getElementById('config-status').textContent = '❌ 保存失败: ' + (e.message || e);
   }
