@@ -465,17 +465,20 @@ class ImageGuard(Star):
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                 response = await client.get(image_url)
                 response.raise_for_status()
-                content_type = response.headers.get("content-type", "")
+                data = response.content
+                # 通过文件头魔数检测真实格式，避免 Content-Type 不准确导致扩展名错误
                 ext = ".jpg"
-                if "png" in content_type:
+                if data[:8] == b'\x89PNG\r\n\x1a\n':
                     ext = ".png"
-                elif "gif" in content_type:
+                elif data[:6] in (b'GIF87a', b'GIF89a'):
                     ext = ".gif"
-                elif "webp" in content_type:
+                elif data[:4] == b'RIFF' and data[8:12] == b'WEBP':
                     ext = ".webp"
+                elif data[:2] == b'BM':
+                    ext = ".bmp"
                 file_path = (AUDIT_IMAGE_DIR / f"{record_id}{ext}").resolve()
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_bytes(response.content)
+                file_path.write_bytes(data)
                 return str(file_path)
         except Exception as e:
             logger.warning(f"[ImageGuard] 下载审核图片失败: {e}")
@@ -494,10 +497,21 @@ class ImageGuard(Star):
             if r.get("id") == record_id:
                 local_image = r.get("local_image")
                 if local_image:
-                    path = Path(local_image).resolve()
+                    path = Path(local_image)
+                    if not path.exists():
+                        path = Path(local_image).resolve()
                     if path.exists():
-                        return await send_file(str(path))
+                        suffix = path.suffix.lower()
+                        mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                                    ".png": "image/png", ".gif": "image/gif",
+                                    ".webp": "image/webp", ".bmp": "image/bmp"}
+                        mimetype = mime_map.get(suffix, "image/jpeg")
+                        logger.info(f"[ImageGuard] 返回本地图片: {path} ({path.stat().st_size} bytes, {mimetype})")
+                        return await send_file(str(path), mimetype=mimetype)
+                    else:
+                        logger.warning(f"[ImageGuard] 图片文件不存在: {local_image}")
                 break
+        logger.warning(f"[ImageGuard] 未找到图片: record_id={record_id}")
         return {"message": "image not found"}, 404
 
     async def _api_audit_list(self):
