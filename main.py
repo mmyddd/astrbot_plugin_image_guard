@@ -2,6 +2,7 @@ import httpx
 import re
 import random
 import json
+import base64
 from datetime import datetime
 from pathlib import Path
 from .image_processor import prepare_audit_images
@@ -91,29 +92,40 @@ class ImageGuard(Star):
         image_urls = []
         for component in message_obj.message:
             if isinstance(component, Image):
-                # v4.26+ 图片 URL 可能在 url/file/path 字段，优先取 HTTP URL
-                candidates = [
-                    u for u in (component.url, component.file, component.path)
-                    if u and isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
-                ]
-                img_url = candidates[0] if candidates else (component.url or component.file or component.path or "")
-                if not img_url or not (img_url.startswith("http://") or img_url.startswith("https://")):
+                # v4.26+ 图片已被 preprocess 统一转为本地文件
+                img_url = component.url or component.file or component.path or ""
+                if not img_url:
                     continue
-                clean_url = img_url.split('?')[0].lower()
-                if clean_url.endswith('.gif'):
-                    continue
-                image_urls.append(img_url)
+                try:
+                    path = Path(img_url.replace("file:///", ""))
+                    if not path.exists():
+                        logger.warning(f"[ImageGuard] 图片文件不存在: {path}")
+                        continue
+                    data = path.read_bytes()
+                    suffix = path.suffix.lower()
+                    if suffix == ".gif":
+                        continue
+                    encoded = base64.b64encode(data).decode("ascii")
+                    mime = {".png": "image/png", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/jpeg")
+                    image_urls.append(f"data:{mime};base64,{encoded}")
+                    logger.info(f"[ImageGuard] 本地图片转 data URL: {path} ({len(data)} bytes)")
+                except Exception as e:
+                    logger.warning(f"[ImageGuard] 读取本地图片失败: {e}")
 
         if not image_urls: return
 
         # === 4. 概率抽查 ===
-        if random.random() > self.config.get("check_probability", 1.0): return
+        if random.random() > self.config.get("check_probability", 1.0):
+            logger.info("[ImageGuard] 概率抽查跳过")
+            return
 
         # === 5. 检查配置 ===
         forbidden_texts = self.config.get("sensitive_texts", [])
         forbidden_descs = self.config.get("forbidden_descriptions", [])
 
-        if not forbidden_texts and not forbidden_descs: return
+        if not forbidden_texts and not forbidden_descs:
+            logger.info("[ImageGuard] 未配置审查规则，跳过")
+            return
 
         # === 6. 审核逻辑 ===
         custom_instruction = self.config.get("custom_vision_prompt", "")
@@ -436,8 +448,8 @@ class ImageGuard(Star):
             "ban_duration": duration,
             "is_group": is_group,
         }
-        # 下载原始图片到本地持久化存储（避免 QQ 图片 URL 过期）
-        if image_url and not image_url.startswith("data:"):
+        # 持久化原始图片（HTTP URL、本地路径、data URL 均支持）
+        if image_url:
             local_path = await self._download_and_save_image(image_url, record["id"])
             if local_path:
                 record["local_image"] = local_path
@@ -460,29 +472,39 @@ class ImageGuard(Star):
         await self.put_kv_data("provider_stats", stats)
 
     async def _download_and_save_image(self, image_url: str, record_id: str):
-        """下载原始图片并保存到持久化目录，返回本地路径或 None"""
+        """保存原始图片到持久化目录，返回本地路径或 None"""
         try:
             AUDIT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                response = await client.get(image_url)
-                response.raise_for_status()
-                data = response.content
-                # 通过文件头魔数检测真实格式，避免 Content-Type 不准确导致扩展名错误
-                ext = ".jpg"
-                if data[:8] == b'\x89PNG\r\n\x1a\n':
+            ext = ".jpg"
+            data = None
+
+            # data: URL — 解码
+            if image_url.startswith("data:"):
+                header, b64 = image_url.split(",", 1)
+                if "image/png" in header:
                     ext = ".png"
-                elif data[:6] in (b'GIF87a', b'GIF89a'):
+                elif "image/gif" in header:
                     ext = ".gif"
-                elif len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+                elif "image/webp" in header:
                     ext = ".webp"
-                elif data[:2] == b'BM':
-                    ext = ".bmp"
+                data = base64.b64decode(b64)
+            # 本地文件 — 复制
+            else:
+                src = Path(image_url.replace("file:///", ""))
+                if src.exists():
+                    ext = src.suffix.lower() or ".jpg"
+                    data = src.read_bytes()
+                else:
+                    logger.warning(f"[ImageGuard] 持久化源文件不存在: {src}")
+                    return None
+
+            if data:
                 file_path = (AUDIT_IMAGE_DIR / f"{record_id}{ext}").resolve()
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_bytes(data)
                 return str(file_path)
         except Exception as e:
-            logger.warning(f"[ImageGuard] 下载审核图片失败: {e}")
+            logger.warning(f"[ImageGuard] 图片持久化失败: {e}")
             return None
 
     async def _api_audit_list(self):
