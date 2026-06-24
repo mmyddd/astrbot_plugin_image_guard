@@ -473,7 +473,8 @@ class ImageGuard(Star):
                     ext = ".gif"
                 elif "webp" in content_type:
                     ext = ".webp"
-                file_path = AUDIT_IMAGE_DIR / f"{record_id}{ext}"
+                file_path = (AUDIT_IMAGE_DIR / f"{record_id}{ext}").resolve()
+                file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_bytes(response.content)
                 return str(file_path)
         except Exception as e:
@@ -493,9 +494,9 @@ class ImageGuard(Star):
             if r.get("id") == record_id:
                 local_image = r.get("local_image")
                 if local_image:
-                    path = Path(local_image)
+                    path = Path(local_image).resolve()
                     if path.exists():
-                        return await send_file(path)
+                        return await send_file(str(path))
                 break
         return {"message": "image not found"}, 404
 
