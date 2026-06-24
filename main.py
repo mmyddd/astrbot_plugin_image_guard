@@ -170,7 +170,8 @@ class ImageGuard(Star):
             # === 8. 判罚 ===
             if is_violation:
                 logger.info(f"[ImageGuard] 违规命中: {reason_str}")
-                await self.enforce_penalty(event, image_urls[0], is_group, reason_str)
+                # image_paths[0] 是原始本地文件，用于上报和持久化（非压缩 data URL）
+                await self.enforce_penalty(event, str(image_paths[0]), is_group, reason_str)
 
         except Exception as e:
             logger.error(f"[ImageGuard] Check failed: {e}")
