@@ -620,12 +620,12 @@ async function saveConfig() {
       llm_timeout_seconds: parseFloat(document.getElementById('cfg-llm_timeout_seconds').value) || 120,
       group_scope: linesToList(document.getElementById('cfg-group_scope').value),
       private_scope: linesToList(document.getElementById('cfg-private_scope').value),
-      check_probability: parseFloat(document.getElementById('cfg-check_probability').value) || 1.0,
+      check_probability: floatVal('cfg-check_probability', 1.0),
       enable_recall: document.getElementById('cfg-enable_recall').checked,
-      ban_duration: parseInt(document.getElementById('cfg-ban_duration').value) || 86400,
+      ban_duration: intVal('cfg-ban_duration', 86400),
       report_target_id: document.getElementById('cfg-report_target_id').value,
-      compressed_image_max_bytes: parseInt(document.getElementById('cfg-compressed_image_max_bytes').value) || 1048576,
-      audit_history_max_records: parseInt(document.getElementById('cfg-audit_history_max_records').value) || 500,
+      compressed_image_max_bytes: intVal('cfg-compressed_image_max_bytes', 1048576),
+      audit_history_max_records: intVal('cfg-audit_history_max_records', 500),
       keep_compressed_image_in_temp: document.getElementById('cfg-keep_compressed_image_in_temp').checked,
       debug_log_llm_response: document.getElementById('cfg-debug_log_llm_response').checked,
     });
@@ -642,6 +642,8 @@ function linesToList(str) { return str.split('\n').map(s => s.trim()).filter(Boo
 function setTextarea(id, val) { document.getElementById(id).value = val || ''; }
 function setValue(id, val) { document.getElementById(id).value = val || ''; }
 function setNumber(id, val) { document.getElementById(id).value = val != null ? val : ''; }
+function intVal(id, fallback) { const v = parseInt(document.getElementById(id).value); return isNaN(v) ? fallback : v; }
+function floatVal(id, fallback) { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? fallback : v; }
 function setCheck(id, val) { document.getElementById(id).checked = !!val; }
 function setSelect(id, val) { document.getElementById(id).value = val || ''; }
 
