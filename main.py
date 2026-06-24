@@ -5,7 +5,7 @@ import json
 import base64
 from datetime import datetime
 from pathlib import Path
-from .image_processor import prepare_audit_images, compress_image_to_data_url
+from .image_processor import compress_image_with_result, _format_compression_result
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -89,28 +89,29 @@ class ImageGuard(Star):
         message_obj = event.message_obj
         if not message_obj.message: return
 
-        image_urls = []
-        max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
+        # 先收集所有本地图片路径
+        image_paths = []
         for component in message_obj.message:
             if isinstance(component, Image):
-                # v4.26+ 图片已被 preprocess 统一转为本地文件
                 img_url = component.url or component.file or component.path or ""
                 if not img_url:
                     continue
-                try:
-                    path = Path(img_url.replace("file:///", ""))
-                    if not path.exists():
-                        logger.warning(f"[ImageGuard] 图片文件不存在: {path}")
-                        continue
-                    suffix = path.suffix.lower()
-                    if suffix == ".gif":
-                        continue
-                    # 直接压缩本地文件（与 HTTP URL 下载后压缩路径一致）
-                    compressed = compress_image_to_data_url(path.read_bytes(), max_image_bytes)
-                    image_urls.append(compressed)
-                    logger.info(f"[ImageGuard] 本地图片压缩: {path} → data URL ({len(compressed)} chars)")
-                except Exception as e:
-                    logger.warning(f"[ImageGuard] 读取本地图片失败: {e}")
+                path = Path(img_url.replace("file:///", ""))
+                if path.exists() and path.suffix.lower() != ".gif":
+                    image_paths.append(path)
+
+        if not image_paths: return
+
+        # 压缩所有图片为 data URL
+        max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
+        image_urls = []
+        for index, path in enumerate(image_paths, start=1):
+            try:
+                result = compress_image_with_result(path.read_bytes(), max_image_bytes)
+                image_urls.append(result.data_url)
+                logger.info(_format_compression_result(index, len(image_paths), result))
+            except Exception as e:
+                logger.warning(f"[ImageGuard] 压缩图片失败 {path}: {e}")
 
         if not image_urls: return
 
@@ -142,17 +143,9 @@ class ImageGuard(Star):
         )
 
         try:
-            keep_compressed_image_in_temp = bool(
-                self.config.get("keep_compressed_image_in_temp", False)
-            )
-            audit_image_urls = await prepare_audit_images(
-                image_urls,
-                max_image_bytes,
-                keep_compressed_image_in_temp=keep_compressed_image_in_temp,
-                compressed_image_temp_dir=Path("data") / "temp" / "astrbot_plugin_image_guard",
-                log_compression_result=logger.info,
-            )
-            response_text = await self._call_audit_llm(prompt, audit_image_urls)
+            # v4.26+ 图片在提取时已压缩为 data URL，无需 prepare_audit_images 再次处理
+            logger.info(f"[ImageGuard] 开始审核，共 {len(image_urls)} 张图片")
+            response_text = await self._call_audit_llm(prompt, image_urls)
             if self.config.get("debug_log_llm_response", False):
                 logger.info(f"[ImageGuard] LLM 返回内容: {response_text}")
 
