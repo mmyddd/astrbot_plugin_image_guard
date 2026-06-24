@@ -91,11 +91,18 @@ class ImageGuard(Star):
         image_urls = []
         for component in message_obj.message:
             if isinstance(component, Image):
-                if component.url:
-                    clean_url = component.url.split('?')[0].lower()
-                    if clean_url.endswith('.gif'):
-                        continue
-                    image_urls.append(component.url)
+                # v4.26+ 图片 URL 可能在 url/file/path 字段，优先取 HTTP URL
+                candidates = [
+                    u for u in (component.url, component.file, component.path)
+                    if u and isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
+                ]
+                img_url = candidates[0] if candidates else (component.url or component.file or component.path or "")
+                if not img_url or not (img_url.startswith("http://") or img_url.startswith("https://")):
+                    continue
+                clean_url = img_url.split('?')[0].lower()
+                if clean_url.endswith('.gif'):
+                    continue
+                image_urls.append(img_url)
 
         if not image_urls: return
 
