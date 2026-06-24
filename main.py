@@ -466,7 +466,7 @@ class ImageGuard(Star):
                     ext = ".png"
                 elif data[:6] in (b'GIF87a', b'GIF89a'):
                     ext = ".gif"
-                elif data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+                elif len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
                     ext = ".webp"
                 elif data[:2] == b'BM':
                     ext = ".bmp"
@@ -478,38 +478,6 @@ class ImageGuard(Star):
             logger.warning(f"[ImageGuard] 下载审核图片失败: {e}")
             return None
 
-    async def _api_audit_image(self):
-        """返回本地存储的审核图片"""
-        from quart import request
-        from quart.wrappers import Response
-        record_id = request.args.get("id")
-        if not record_id:
-            return {"message": "missing id"}, 400
-        records = await self.get_kv_data("audit_history", [])
-        if not isinstance(records, list):
-            records = []
-        for r in records:
-            if r.get("id") == record_id:
-                local_image = r.get("local_image")
-                if local_image:
-                    path = Path(local_image)
-                    if not path.exists():
-                        path = Path(local_image).resolve()
-                    if path.exists():
-                        suffix = path.suffix.lower()
-                        mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                                    ".png": "image/png", ".gif": "image/gif",
-                                    ".webp": "image/webp", ".bmp": "image/bmp"}
-                        mimetype = mime_map.get(suffix, "application/octet-stream")
-                        data = path.read_bytes()
-                        logger.info(f"[ImageGuard] 返回本地图片: {path} ({len(data)} bytes, {mimetype})")
-                        return Response(data, mimetype=mimetype)
-                    else:
-                        logger.warning(f"[ImageGuard] 图片文件不存在: {local_image}")
-                break
-        logger.warning(f"[ImageGuard] 未找到图片: record_id={record_id}")
-        return {"message": "image not found"}, 404
-
     async def _api_audit_list(self):
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
@@ -518,7 +486,11 @@ class ImageGuard(Star):
         if not isinstance(stats, dict):
             stats = {}
         # 为有本地缓存的记录生成 file_token 下载链接（绕过 /api/plug 的 JWT 认证）
-        from astrbot.core import file_token_service
+        try:
+            from astrbot.core import file_token_service
+        except ImportError:
+            file_token_service = None
+            logger.warning("[ImageGuard] file_token_service 不可用，图片将回退到原始 URL")
         for r in records:
             if r.get("local_image"):
                 path = Path(r["local_image"])
@@ -526,11 +498,12 @@ class ImageGuard(Star):
                     path = Path(r["local_image"]).resolve()
                 if path.exists():
                     r["local_image_size"] = path.stat().st_size
-                    try:
-                        token = await file_token_service.register_file(str(path), timeout=86400)
-                        r["local_image_url"] = f"/api/file/{token}"
-                    except Exception as e:
-                        logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
+                    if file_token_service:
+                        try:
+                            token = await file_token_service.register_file(str(path), timeout=86400)
+                            r["local_image_url"] = f"/api/file/{token}"
+                        except Exception as e:
+                            logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
         return {"records": records, "provider_stats": stats}
 
     async def _api_audit_clear(self):
@@ -574,8 +547,11 @@ class ImageGuard(Star):
                 if plugin_md.config:
                     plugin_md.config.save_config(new_config)
                     # 重载插件使新配置生效
-                    if hasattr(self.context, "_star_manager"):
-                        await self.context._star_manager.reload("astrbot_plugin_image_guard")
+                    try:
+                        if hasattr(self.context, "_star_manager"):
+                            await self.context._star_manager.reload("astrbot_plugin_image_guard")
+                    except Exception as e:
+                        logger.warning(f"[ImageGuard] 插件重载失败: {e}")
                     return {"message": "ok"}
                 break
 
