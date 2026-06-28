@@ -119,14 +119,12 @@ class ImageAuditCache:
 
     def _evict_lowest_count_entries(self) -> None:
         """超出上限时淘汰计数最低的条目（LRU 近似），一次最多淘汰 5%。"""
-        overage = len(self._data) - self._max_entries
-        if overage <= 0:
-            return
-        # 按计数升序排列，取前 overage 个（至少淘汰 1 条，最多 5%）
-        to_remove = min(overage + 1, max(1, len(self._data) // 20))
-        sorted_keys = sorted(self._data, key=lambda k: self._data[k])  # type: ignore[arg-type]
-        for key in sorted_keys[:to_remove]:
-            self._data.pop(key, None)
+        while len(self._data) > self._max_entries > 0:
+            # 按计数升序排列，取前 max(1, 5%) 条淘汰
+            to_remove = max(1, len(self._data) // 20)
+            sorted_keys = sorted(self._data, key=lambda k: self._data[k])  # type: ignore[arg-type]
+            for key in sorted_keys[:to_remove]:
+                self._data.pop(key, None)
 
     # ── 序列化 ────────────────────────────────────────────────
 
@@ -142,6 +140,8 @@ class ImageAuditCache:
                     key = str(k)
                     existing = self._data.get(key, 0)
                     self._data[key] = max(existing, int(v))
+            # 加载后同步到当前 max_entries 上限
+            self._evict_lowest_count_entries()
 
     # ── 管理 ──────────────────────────────────────────────────
 

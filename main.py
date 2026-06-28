@@ -21,8 +21,8 @@ class ImageGuard(Star):
         self.config = config
 
         # ── 审核缓存（同一图片重复多次后跳过） ──
-        cache_threshold = int(config.get("audit_cache_threshold", 3)) if config else 3
-        cache_max_entries = int(config.get("audit_cache_max_entries", 10000)) if config else 10000
+        cache_threshold = config.get("audit_cache_threshold", 3) if config else 3
+        cache_max_entries = config.get("audit_cache_max_entries", 10000) if config else 10000
         self._audit_cache = ImageAuditCache(
             threshold=cache_threshold, max_entries=cache_max_entries
         )
@@ -163,11 +163,12 @@ class ImageGuard(Star):
             # 去重：同一消息中相同的图片只送审一次，避免浪费 LLM 调用和计数膨胀
             dedup = dict.fromkeys(sending_fingerprints)  # key 按首次出现顺序排列
             if len(dedup) != len(sending_fingerprints):
+                before = len(sending_fingerprints)
                 url_by_fp = dict(zip(sending_fingerprints, sending_urls))
                 sending_fingerprints = list(dedup)
                 sending_urls = [url_by_fp[fp] for fp in sending_fingerprints]
                 logger.info(
-                    f"[ImageGuard] 去重后剩余 {len(sending_urls)}/{len(dedup)} 张不重复图片"
+                    f"[ImageGuard] 去重后剩余 {len(sending_urls)}/{before} 张不重复图片"
                 )
 
             image_urls = sending_urls
