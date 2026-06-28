@@ -6,19 +6,30 @@ import base64
 from datetime import datetime
 from pathlib import Path
 from .cache import ImageAuditCache
-from .image_processor import compress_image_with_result, _format_compression_result
+from .image_processor import (
+    compress_image_with_result,
+    _format_compression_result,
+    _save_compressed_image_to_temp,
+    _resolve_compressed_image_temp_dir,
+)
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import Image, Plain
+from astrbot.api.message_components import Image
 
 AUDIT_IMAGE_DIR = Path("data") / "plugin_data" / "image_guard" / "audit_images"
+
+# ── 预编译正则（避免每次消息重新编译） ──
+_RESULT_RE = re.compile(r"RESULT:\s*(VIOLATION|SAFE)", re.IGNORECASE)
+_REASON_RE = re.compile(r"REASON:\s*(.+)", re.IGNORECASE)
 
 @register("image_guard", "YEZI", "图片内容审查卫士", "1.7.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        # 共享 HTTP 客户端（复用连接池）
+        self._http_client = httpx.AsyncClient(timeout=120.0)
 
         # ── 审核缓存（同一图片重复多次后跳过） ──
         cache_threshold = config.get("audit_cache_threshold", 3) if config else 3
@@ -93,24 +104,19 @@ class ImageGuard(Star):
         else:
             if "0" not in private_scope and user_id not in private_scope: return
 
-        # === 2. 表情包与GIF强过滤 (Sticker Filter) ===
-        raw_chain = []
-        try:
-            if hasattr(event, "original_event") and hasattr(event.original_event, "message"):
-                raw_chain = event.original_event.message
-            elif hasattr(event.message_obj, "raw_message"):
-                raw_chain = event.message_obj.raw_message
-
+        # === 2. 过滤商城大表情（mface→image 转换）并提取图片 ===
+        # QQ 商城大表情收到时会转为 image 段并带 key/emoji_id 等额外字段
+        if hasattr(event, "original_event") and hasattr(event.original_event, "message"):
+            raw_chain = event.original_event.message
             if isinstance(raw_chain, list):
                 for seg in raw_chain:
                     if isinstance(seg, dict) and seg.get("type") == "image":
                         data = seg.get("data", {})
-                        sub_type = int(data.get("sub_type", 0))
-                        if sub_type != 0: return  # 忽略表情包
-        except Exception:
-            pass
+                        if data.get("key") or data.get("emoji_id"):
+                            logger.info("[ImageGuard] 商城大表情，跳过审核")
+                            return
 
-        # === 3. 提取图片 URL 并过滤 GIF ===
+        # === 3. 提取图片路径并过滤 GIF ===
         message_obj = event.message_obj
         if not message_obj.message: return
 
@@ -127,12 +133,19 @@ class ImageGuard(Star):
 
         if not image_paths: return
 
-        # 压缩所有图片为 data URL
+        # === 4. 压缩所有图片为 data URL ===
         max_image_bytes = int(self.config.get("compressed_image_max_bytes", 1048576))
+        keep_temp = self.config.get("keep_compressed_image_in_temp", False)
         image_urls = []
         for index, path in enumerate(image_paths, start=1):
             try:
                 result = compress_image_with_result(path.read_bytes(), max_image_bytes)
+                if keep_temp:
+                    result = _save_compressed_image_to_temp(
+                        result,
+                        str(path),
+                        _resolve_compressed_image_temp_dir(None),
+                    )
                 image_urls.append(result.data_url)
                 logger.info(_format_compression_result(index, len(image_paths), result))
             except Exception as e:
@@ -140,7 +153,7 @@ class ImageGuard(Star):
 
         if not image_urls: return
 
-        # === 4. 审核缓存检查（重复多次的图片跳过审核） ===
+        # === 5. 审核缓存检查（重复多次的图片跳过审核） ===
         cache_enabled = self.config.get("audit_cache_enabled", True)
         if cache_enabled:
             await self._ensure_audit_cache_loaded()
@@ -175,12 +188,12 @@ class ImageGuard(Star):
         else:
             sending_fingerprints = []
 
-        # === 5. 概率抽查 ===
+        # === 6. 概率抽查 ===
         if random.random() > self.config.get("check_probability", 1.0):
             logger.info("[ImageGuard] 概率抽查跳过")
             return
 
-        # === 6. 检查配置 ===
+        # === 7. 检查配置 ===
         forbidden_texts = self.config.get("sensitive_texts", [])
         forbidden_descs = self.config.get("forbidden_descriptions", [])
 
@@ -188,7 +201,7 @@ class ImageGuard(Star):
             logger.info("[ImageGuard] 未配置审查规则，跳过")
             return
 
-        # === 7. 审核逻辑 ===
+        # === 8. 审核逻辑 ===
         custom_instruction = self.config.get("custom_vision_prompt", "")
         prompt = (
             "你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n"
@@ -215,9 +228,9 @@ class ImageGuard(Star):
                     self._audit_cache.record_audit(fp)
                 await self._save_audit_cache()
 
-            # === 8. 解析结果 ===
-            result_match = re.search(r"RESULT:\s*(VIOLATION|SAFE)", response_text, re.IGNORECASE)
-            reason_match = re.search(r"REASON:\s*(.+)", response_text, re.IGNORECASE)
+            # === 9. 解析结果 ===
+            result_match = _RESULT_RE.search(response_text)
+            reason_match = _REASON_RE.search(response_text)
 
             is_violation = False
             reason_str = "未说明理由"
@@ -233,7 +246,7 @@ class ImageGuard(Star):
             elif is_violation:
                 reason_str = response_text.split('\n')[0][:50]
 
-            # === 9. 判罚 ===
+            # === 10. 判罚 ===
             if is_violation:
                 logger.info(f"[ImageGuard] 违规命中: {reason_str}")
                 # image_paths[0] 是原始本地文件，用于上报和持久化（非压缩 data URL）
@@ -244,7 +257,7 @@ class ImageGuard(Star):
 
     # ── 多供应商调用核心 ──────────────────────────────────────
 
-    async def _call_audit_llm(self, prompt, image_urls):
+    async def _call_audit_llm(self, prompt: str, image_urls: list[str]) -> str:
         """按 llm_providers 列表顺序依次尝试，第一个成功的即返回。
 
         列表中每个条目是一个"供应商"，由其 ``__template_key`` 字段区分类型：
@@ -292,7 +305,7 @@ class ImageGuard(Star):
             ) from last_exception
         raise RuntimeError("没有可用的供应商配置")
 
-    async def _call_single_api(self, prompt, image_urls, provider: dict):
+    async def _call_single_api(self, prompt: str, image_urls: list[str], provider: dict) -> str | None:
         """调用单个 OpenAI 兼容 API 进行审核。
 
         Args:
@@ -321,41 +334,41 @@ class ImageGuard(Star):
             })
 
         timeout_seconds = float(self.config.get("llm_timeout_seconds", 120))
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            payload = {
-                "model": model_name or "gpt-4o",
-                "messages": messages,
-                "max_tokens": int(self.config.get("llm_max_tokens", 512)),
-            }
-            reasoning_effort = self.config.get("reasoning_effort", "")
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
+        payload = {
+            "model": model_name or "gpt-4o",
+            "messages": messages,
+            "max_tokens": int(self.config.get("llm_max_tokens", 512)),
+        }
+        reasoning_effort = self.config.get("reasoning_effort", "")
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
-            resp = await client.post(
-                f"{base_url.rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}"}
+        resp = await self._http_client.post(
+            f"{base_url.rstrip('/')}/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        response_json = resp.json()
+        if self.config.get("debug_log_llm_response", False):
+            logger.info(
+                f"[ImageGuard] {api_name} 原始响应: "
+                f"{json.dumps(response_json, ensure_ascii=False)}"
             )
-            resp.raise_for_status()
-            response_json = resp.json()
-            if self.config.get("debug_log_llm_response", False):
-                logger.info(
-                    f"[ImageGuard] {api_name} 原始响应: "
-                    f"{json.dumps(response_json, ensure_ascii=False)}"
-                )
 
-            choice = response_json["choices"][0]
-            message = choice.get("message", {})
-            content = message.get("content") or choice.get("text")
-            if not content or not str(content).strip():
-                finish_reason = choice.get("finish_reason", "unknown")
-                raise ValueError(
-                    f"{api_name} 返回内容为空，finish_reason={finish_reason}"
-                )
+        choice = response_json["choices"][0]
+        message = choice.get("message", {})
+        content = message.get("content") or choice.get("text")
+        if not content or not str(content).strip():
+            finish_reason = choice.get("finish_reason", "unknown")
+            raise ValueError(
+                f"{api_name} 返回内容为空，finish_reason={finish_reason}"
+            )
 
-            return str(content)
+        return str(content)
 
-    async def _call_astrbot_provider(self, prompt, image_urls):
+    async def _call_astrbot_provider(self, prompt: str, image_urls: list[str]) -> str:
         """回退到 AstrBot 当前会话配置的 LLM Provider。"""
         provider = self.context.get_using_provider()
         if not provider:
@@ -466,34 +479,62 @@ class ImageGuard(Star):
             for entry in self.config.get("group_report_targets", []):
                 # 兼容旧版字符串格式 "来源群号:type:id"
                 if isinstance(entry, str):
-                    group_text, _, target_text = entry.partition(":")
-                    if not _ or group_text.strip() != str(group_id):
+                    group_text, sep, target_text = entry.partition(":")
+                    if not sep or group_text.strip() != str(group_id):
                         continue
-                    target_kind, sep, target_id_text = target_text.partition(":")
-                    if sep:
-                        target_kind = target_kind.strip().lower()
-                        target_id = int(target_id_text.strip())
-                    else:
-                        target_kind = "private"
-                        target_id = int(target_text.strip())
+                    target_kind, type_sep, target_id_text = target_text.partition(":")
+                    try:
+                        if type_sep:
+                            target_kind = target_kind.strip().lower()
+                            target_id = int(target_id_text.strip())
+                        else:
+                            target_kind = "private"
+                            target_id = int(target_text.strip())
+                    except (ValueError, TypeError) as exc:
+                        logger.warning(
+                            f"[ImageGuard] 战报目标解析失败 (旧格式): {entry}, {exc}"
+                        )
+                        continue
                     return target_kind, target_id
 
                 # 新版 template_list 格式
-                if entry.get("source_group_id", "").strip() == str(group_id):
+                src_id = entry.get("source_group_id", "").strip()
+                if src_id == str(group_id):
                     target_kind = entry.get("target_type", "private").strip().lower()
                     raw_id = entry.get("target_id", "").strip()
-                    if raw_id:
+                    if not raw_id:
+                        continue
+                    try:
                         return target_kind, int(raw_id)
+                    except (ValueError, TypeError) as exc:
+                        logger.warning(
+                            f"[ImageGuard] 战报目标解析失败 (新模板): {entry}, {exc}"
+                        )
+                        continue
 
         report_target = self.config.get("report_target_id")
         if report_target:
-            return "private", int(str(report_target).strip())
+            try:
+                return "private", int(str(report_target).strip())
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    f"[ImageGuard] report_target_id 解析失败: {report_target}, {exc}"
+                )
 
         return None
 
     # ── 审核历史 ────────────────────────────────────────────────
 
-    async def _save_audit_record(self, event, image_url, reason, recalled, banned, duration, is_group):
+    async def _save_audit_record(
+        self,
+        event: AstrMessageEvent,
+        image_url: str,
+        reason: str,
+        recalled: bool,
+        banned: bool,
+        duration: int,
+        is_group: bool,
+    ) -> None:
         record = {
             "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -522,7 +563,7 @@ class ImageGuard(Star):
             records = records[-max_records:]
         await self.put_kv_data("audit_history", records)
 
-    async def _track_provider_usage(self, provider_name: str):
+    async def _track_provider_usage(self, provider_name: str) -> None:
         """记录供应商调用次数"""
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
@@ -530,7 +571,7 @@ class ImageGuard(Star):
         stats[provider_name] = stats.get(provider_name, 0) + 1
         await self.put_kv_data("provider_stats", stats)
 
-    async def _download_and_save_image(self, image_url: str, record_id: str):
+    async def _download_and_save_image(self, image_url: str, record_id: str) -> str | None:
         """保存原始图片到持久化目录，返回本地路径或 None"""
         try:
             AUDIT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -547,6 +588,21 @@ class ImageGuard(Star):
                 elif "image/webp" in header:
                     ext = ".webp"
                 data = base64.b64decode(b64)
+            # HTTP/HTTPS 远程 URL — 下载
+            elif image_url.startswith(("http://", "https://")):
+                resp = await self._http_client.get(image_url)
+                resp.raise_for_status()
+                data = resp.content
+                # 根据 Content-Type 推断扩展名
+                content_type = resp.headers.get("content-type", "")
+                if "image/png" in content_type:
+                    ext = ".png"
+                elif "image/gif" in content_type:
+                    ext = ".gif"
+                elif "image/webp" in content_type:
+                    ext = ".webp"
+                elif "image/jpeg" in content_type or "image/jpg" in content_type:
+                    ext = ".jpg"
             # 本地文件 — 复制
             else:
                 src = Path(image_url.replace("file:///", ""))
@@ -566,7 +622,7 @@ class ImageGuard(Star):
             logger.warning(f"[ImageGuard] 图片持久化失败: {e}")
             return None
 
-    async def _api_audit_list(self):
+    async def _api_audit_list(self) -> dict:
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
             records = []
@@ -611,7 +667,7 @@ class ImageGuard(Star):
         await self.put_kv_data("audit_history", records)
         return {"message": "ok"}
 
-    async def _api_audit_config_get(self):
+    async def _api_audit_config_get(self) -> dict:
         """返回当前插件配置（排除 KV 类数据）"""
         from astrbot.core.star.star import star_registry
         for plugin_md in star_registry:
@@ -636,11 +692,25 @@ class ImageGuard(Star):
                     plugin_md.config.save_config(new_config)
                     # 重载插件使新配置生效
                     try:
-                        if hasattr(self.context, "_star_manager"):
+                        reloaded = False
+                        # 优先使用公开 API
+                        if hasattr(self.context, "reload_plugin"):
+                            await self.context.reload_plugin("astrbot_plugin_image_guard")
+                            reloaded = True
+                        elif hasattr(self.context, "_star_manager"):
                             await self.context._star_manager.reload("astrbot_plugin_image_guard")
+                            reloaded = True
+                        if not reloaded:
+                            logger.warning("[ImageGuard] 找不到 reload 方法，配置已保存但需手动重载插件")
                     except Exception as e:
                         logger.warning(f"[ImageGuard] 插件重载失败: {e}")
                     return {"message": "ok"}
                 break
 
         return {"message": "plugin config not found"}, 404
+
+    # ── 生命周期 ────────────────────────────────────────────────
+
+    async def terminate(self):
+        """插件卸载时清理资源。"""
+        await self._http_client.aclose()

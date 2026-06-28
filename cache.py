@@ -56,7 +56,7 @@ class ImageAuditCache:
     @staticmethod
     def _resolve_threshold(raw: object) -> int:
         try:
-            return max(int(raw), 1)  # type: ignore[arg-type]
+            return max(int(raw), 1)  # type: ignore
         except (TypeError, ValueError):
             return DEFAULT_REVIEW_THRESHOLD
 
@@ -118,11 +118,11 @@ class ImageAuditCache:
     # ── 淘汰策略 ──────────────────────────────────────────────
 
     def _evict_lowest_count_entries(self) -> None:
-        """超出上限时淘汰计数最低的条目（LRU 近似），一次最多淘汰 5%。"""
+        """超出上限时淘汰计数最低的条目（LFU 近似），一次最多淘汰 5%。"""
         while len(self._data) > self._max_entries > 0:
             # 按计数升序排列，取前 max(1, 5%) 条淘汰
             to_remove = max(1, len(self._data) // 20)
-            sorted_keys = sorted(self._data, key=lambda k: self._data[k])  # type: ignore[arg-type]
+            sorted_keys = sorted(self._data, key=lambda k: self._data[k])
             for key in sorted_keys[:to_remove]:
                 self._data.pop(key, None)
 

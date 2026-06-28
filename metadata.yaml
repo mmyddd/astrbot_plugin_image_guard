@@ -3,3 +3,5 @@ version: 1.7.0
 desc: 基于多模态 LLM 的图片内容审查卫士。v1.7.0 引入模板化供应商列表 (template_list)，支持动态增删排序，旧配置自动迁移。
 author: YEZI
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
+# Python 依赖：pillow (PIL)、httpx
+# 通过 AstrBot Dashboard 或 pip install pillow httpx 安装

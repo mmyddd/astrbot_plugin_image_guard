@@ -53,7 +53,8 @@ def compress_image_to_data_url(image_bytes: bytes, max_bytes: int) -> str:
 
 
 def compress_image_with_result(image_bytes: bytes, max_bytes: int) -> ImageCompressionResult:
-    image = ImageOps.exif_transpose(PillowImage.open(io.BytesIO(image_bytes))).convert("RGB")
+    raw = PillowImage.open(io.BytesIO(image_bytes))
+    image = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
     original_width, original_height = image.size
     image_max_bytes = max(1, ((max_bytes - len(JPEG_DATA_URL_PREFIX)) * 3) // 4)
     compressed = _compress_jpeg(image, image_max_bytes)
@@ -81,6 +82,13 @@ async def prepare_audit_images(
     compressed_image_temp_dir: Path | None = None,
     log_compression_result: CompressionLogWriter | None = None,
 ) -> list[str]:
+    """（旧版异步路径）从 URL 列表下载并压缩图片为 data URL。
+
+    .. note::
+       main.py 当前不使用此函数——它直接通过 ``Path.read_bytes()`` + 
+       ``compress_image_with_result`` 同步处理本地文件。
+       此函数保留为 legacy/alternate 入口，用于远程 URL 批量处理场景。
+    """
     prepared_urls = []
     total_images = len(image_urls)
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
