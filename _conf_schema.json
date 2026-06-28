@@ -204,5 +204,22 @@
     "description": "抽查概率 (0.0-1.0)，1.0为每图必查",
     "type": "float",
     "default": 1.0
+  },
+  "audit_cache_enabled": {
+    "description": "启用审核缓存。开启后同一张图片审核超过阈值次数将自动跳过，减少不必要的 LLM 调用。",
+    "type": "bool",
+    "default": true
+  },
+  "audit_cache_threshold": {
+    "description": "审核缓存阈值。同一张图片累计审核达到该次数后，后续遇到将直接跳过。",
+    "type": "int",
+    "default": 3,
+    "hint": "设为1表示同一图片仅审核一次后即跳过；设为0会被自动调整为1；建议3-5次"
+  },
+  "audit_cache_max_entries": {
+    "description": "审核缓存最大条目数。超出上限时自动淘汰计数最低的条目，防止内存和KV存储无界增长。",
+    "type": "int",
+    "default": 10000,
+    "hint": "设为0表示不设上限（不推荐）；日常使用10000已足够"
   }
 }

@@ -5,6 +5,7 @@ import json
 import base64
 from datetime import datetime
 from pathlib import Path
+from .cache import ImageAuditCache
 from .image_processor import compress_image_with_result, _format_compression_result
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -18,6 +19,14 @@ class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+
+        # ── 审核缓存（同一图片重复多次后跳过） ──
+        cache_threshold = int(config.get("audit_cache_threshold", 3)) if config else 3
+        cache_max_entries = int(config.get("audit_cache_max_entries", 10000)) if config else 10000
+        self._audit_cache = ImageAuditCache(
+            threshold=cache_threshold, max_entries=cache_max_entries
+        )
+        self._audit_cache_loaded = False
 
         # ── 审核历史 API ──
         context.register_web_api(
@@ -50,6 +59,22 @@ class ImageGuard(Star):
             ["POST"],
             "更新插件配置并重载",
         )
+
+    # ── 审核缓存持久化 ─────────────────────────────────────────
+
+    async def _ensure_audit_cache_loaded(self) -> None:
+        """从 KV 存储加载审核缓存（首次调用时）。"""
+        if not self._audit_cache_loaded:
+            data = await self.get_kv_data("image_audit_cache", {})
+            self._audit_cache.from_dict(data)
+            self._audit_cache_loaded = True
+
+    async def _save_audit_cache(self) -> None:
+        """将审核缓存持久化到 KV 存储（仅当有变动时）。"""
+        if not self._audit_cache.dirty:
+            return
+        await self.put_kv_data("image_audit_cache", self._audit_cache.to_dict())
+        self._audit_cache.mark_clean()
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
@@ -115,12 +140,46 @@ class ImageGuard(Star):
 
         if not image_urls: return
 
-        # === 4. 概率抽查 ===
+        # === 4. 审核缓存检查（重复多次的图片跳过审核） ===
+        cache_enabled = self.config.get("audit_cache_enabled", True)
+        if cache_enabled:
+            await self._ensure_audit_cache_loaded()
+            fingerprints = [ImageAuditCache.compute_fingerprint(u) for u in image_urls]
+            sending_urls: list[str] = []
+            sending_fingerprints: list[str] = []
+            for url, fp in zip(image_urls, fingerprints):
+                if self._audit_cache.should_skip(fp):
+                    logger.info(
+                        f"[ImageGuard] 图片指纹 {fp[:12]} "
+                        f"已审核 {self._audit_cache.get_count(fp)} 次，跳过审核"
+                    )
+                else:
+                    sending_urls.append(url)
+                    sending_fingerprints.append(fp)
+            if not sending_urls:
+                logger.info("[ImageGuard] 所有图片均已多次审核，跳过本次审核")
+                return
+
+            # 去重：同一消息中相同的图片只送审一次，避免浪费 LLM 调用和计数膨胀
+            dedup = dict.fromkeys(sending_fingerprints)  # key 按首次出现顺序排列
+            if len(dedup) != len(sending_fingerprints):
+                url_by_fp = dict(zip(sending_fingerprints, sending_urls))
+                sending_fingerprints = list(dedup)
+                sending_urls = [url_by_fp[fp] for fp in sending_fingerprints]
+                logger.info(
+                    f"[ImageGuard] 去重后剩余 {len(sending_urls)}/{len(dedup)} 张不重复图片"
+                )
+
+            image_urls = sending_urls
+        else:
+            sending_fingerprints = []
+
+        # === 5. 概率抽查 ===
         if random.random() > self.config.get("check_probability", 1.0):
             logger.info("[ImageGuard] 概率抽查跳过")
             return
 
-        # === 5. 检查配置 ===
+        # === 6. 检查配置 ===
         forbidden_texts = self.config.get("sensitive_texts", [])
         forbidden_descs = self.config.get("forbidden_descriptions", [])
 
@@ -128,7 +187,7 @@ class ImageGuard(Star):
             logger.info("[ImageGuard] 未配置审查规则，跳过")
             return
 
-        # === 6. 审核逻辑 ===
+        # === 7. 审核逻辑 ===
         custom_instruction = self.config.get("custom_vision_prompt", "")
         prompt = (
             "你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n"
@@ -149,7 +208,13 @@ class ImageGuard(Star):
             if self.config.get("debug_log_llm_response", False):
                 logger.info(f"[ImageGuard] LLM 返回内容: {response_text}")
 
-            # === 7. 解析结果 ===
+            # 记录本批图片的审核次数（无论是否违规）
+            if cache_enabled and sending_fingerprints:
+                for fp in sending_fingerprints:
+                    self._audit_cache.record_audit(fp)
+                await self._save_audit_cache()
+
+            # === 8. 解析结果 ===
             result_match = re.search(r"RESULT:\s*(VIOLATION|SAFE)", response_text, re.IGNORECASE)
             reason_match = re.search(r"REASON:\s*(.+)", response_text, re.IGNORECASE)
 
@@ -167,7 +232,7 @@ class ImageGuard(Star):
             elif is_violation:
                 reason_str = response_text.split('\n')[0][:50]
 
-            # === 8. 判罚 ===
+            # === 9. 判罚 ===
             if is_violation:
                 logger.info(f"[ImageGuard] 违规命中: {reason_str}")
                 # image_paths[0] 是原始本地文件，用于上报和持久化（非压缩 data URL）
