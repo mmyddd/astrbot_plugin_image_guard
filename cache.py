@@ -162,5 +162,4 @@ class ImageAuditCache:
             "images_skip_audit": skipped,
             "threshold": self._threshold,
             "max_entries": self._max_entries,
-            "dirty": self._dirty,
         }

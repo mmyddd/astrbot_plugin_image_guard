@@ -203,6 +203,11 @@
     <div id="provider-stats">加载中…</div>
   </div>
 
+  <div class="provider-section">
+    <div class="title">📦 审核缓存 <span style="font-size:11px;color:var(--text-secondary);font-weight:400;">同一图片重复多次后跳过审核</span></div>
+    <div id="cache-stats">加载中…</div>
+  </div>
+
   <table>
     <thead>
       <tr>
@@ -440,6 +445,7 @@ async function loadRecords() {
     const res = await window.AstrBotPluginPage.apiGet('audit/list');
     allRecords = (res.records || []).reverse();
     renderStats(res.provider_stats);
+    renderCacheStats(res.cache_stats, res.storage_size);
     render();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">加载失败: ${e.message || e}</td></tr>`;
@@ -463,6 +469,28 @@ function renderStats(stats) {
       <span class="count">${stats[k]}</span>
     </div>`;
   }).join('');
+}
+
+function renderCacheStats(cs, ss) {
+  const el = document.getElementById('cache-stats');
+  if (!cs || !cs.total_unique_images) {
+    el.innerHTML = '<span style="font-size:12px;color:var(--text-secondary);">暂无缓存数据</span>';
+    return;
+  }
+  const sizeHtml = ss ? `
+    <div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">
+      审核记录 ${formatBytes(ss.audit_records ?? 0)} | 缓存 ${formatBytes(ss.cache_data ?? 0)}
+    </div>` : '';
+  el.innerHTML = `
+    <div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;">
+        <span>🖼️ 缓存图片 <strong>${cs.total_unique_images}</strong> 张</span>
+        <span>⏭️ 已跳过 <strong>${cs.images_skip_audit}</strong> 张</span>
+        <span>🎯 阈值 <strong>${cs.threshold}</strong> 次</span>
+        <span>📦 上限 <strong>${cs.max_entries}</strong> 条</span>
+      </div>
+      ${sizeHtml}
+    </div>`;
 }
 
 function render() {

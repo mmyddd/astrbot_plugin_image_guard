@@ -629,6 +629,21 @@ class ImageGuard(Star):
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
+        # 审核缓存统计（仅在启用时加载）
+        cache_enabled = self.config.get("audit_cache_enabled", True)
+        if cache_enabled:
+            await self._ensure_audit_cache_loaded()
+            cache_stats = self._audit_cache.stats
+            cache_dict = self._audit_cache.to_dict()
+            cache_data_size = len(json.dumps(cache_dict).encode("utf-8"))
+        else:
+            cache_stats = {
+                "total_unique_images": 0,
+                "images_skip_audit": 0,
+                "threshold": 0,
+                "max_entries": 0,
+            }
+            cache_data_size = 0
         # 为有本地缓存的记录生成 file_token 下载链接（绕过 /api/plug 的 JWT 认证）
         try:
             from astrbot.core import file_token_service
@@ -648,7 +663,16 @@ class ImageGuard(Star):
                             r["local_image_url"] = f"/api/file/{token}"
                         except Exception as e:
                             logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
-        return {"records": records, "provider_stats": stats}
+        records_json = json.dumps(records, ensure_ascii=False).encode("utf-8")
+        return {
+            "records": records,
+            "provider_stats": stats,
+            "cache_stats": cache_stats,
+            "storage_size": {
+                "audit_records": len(records_json),
+                "cache_data": cache_data_size,
+            },
+        }
 
     async def _api_audit_clear(self):
         await self.put_kv_data("audit_history", [])
