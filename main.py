@@ -23,7 +23,7 @@ AUDIT_IMAGE_DIR = Path("data") / "plugin_data" / "image_guard" / "audit_images"
 _RESULT_RE = re.compile(r"RESULT:\s*(VIOLATION|SAFE)", re.IGNORECASE)
 _REASON_RE = re.compile(r"REASON:\s*(.+)", re.IGNORECASE)
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.1")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
