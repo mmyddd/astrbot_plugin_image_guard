@@ -22,8 +22,55 @@ AUDIT_IMAGE_DIR = Path("data") / "plugin_data" / "image_guard" / "audit_images"
 # ── 预编译正则（避免每次消息重新编译） ──
 _RESULT_RE = re.compile(r"RESULT:\s*(VIOLATION|SAFE)", re.IGNORECASE)
 _REASON_RE = re.compile(r"REASON:\s*(.+)", re.IGNORECASE)
+_TAGS_RE = re.compile(r"^\s*TAGS:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
+_MAX_AUDIT_TAGS = 8
+_MAX_AUDIT_TAG_LENGTH = 24
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.1")
+
+def _normalize_audit_tags(raw_tags: object) -> list[str]:
+    """清洗模型返回的标签，去重并限制数量，避免脏数据进入历史记录。"""
+    if isinstance(raw_tags, str):
+        values = re.split(r"[,，、|]\s*", raw_tags)
+    elif isinstance(raw_tags, (list, tuple, set)):
+        values = list(raw_tags)
+    else:
+        values = []
+
+    normalized = []
+    seen = set()
+    for value in values:
+        tag = str(value).strip().strip("[]\"'`")
+        if not tag:
+            continue
+        tag = tag[:_MAX_AUDIT_TAG_LENGTH]
+        if tag not in seen:
+            seen.add(tag)
+            normalized.append(tag)
+        if len(normalized) >= _MAX_AUDIT_TAGS:
+            break
+    return normalized
+
+
+def _parse_audit_tags(response_text: str) -> list[str]:
+    """解析 TAGS 行，优先读取 JSON 数组，兼容普通逗号分隔文本。"""
+    match = _TAGS_RE.search(response_text or "")
+    if not match:
+        return []
+
+    raw_value = match.group(1).strip()
+    if not raw_value:
+        return []
+
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = raw_value
+    if isinstance(parsed, dict):
+        parsed = parsed.get("tags", [])
+    return _normalize_audit_tags(parsed)
+
+
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.2")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -210,9 +257,11 @@ class ImageGuard(Star):
             f"1. 包含文字：{str(forbidden_texts)}\n"
             f"2. 包含画面：{str(forbidden_descs)}\n\n"
             "【输出格式要求】\n"
-            "请严格按照以下两行格式输出，不要包含其他废话：\n"
+            "请严格按照以下三行格式输出，不要包含其他废话：\n"
             "REASON: [这里简要说明判断理由，不超过20字]\n"
             "RESULT: [SAFE 或 VIOLATION]\n"
+            "TAGS: [JSON数组，例如 [\"肌肤裸露\", \"白丝\"]；SAFE 时必须为 []]\n"
+            "标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"
         )
 
         try:
@@ -231,6 +280,7 @@ class ImageGuard(Star):
             # === 9. 解析结果 ===
             result_match = _RESULT_RE.search(response_text)
             reason_match = _REASON_RE.search(response_text)
+            parsed_tags = _parse_audit_tags(response_text)
 
             is_violation = False
             reason_str = "未说明理由"
@@ -248,9 +298,16 @@ class ImageGuard(Star):
 
             # === 10. 判罚 ===
             if is_violation:
+                audit_tags = parsed_tags
                 logger.info(f"[ImageGuard] 违规命中: {reason_str}")
                 # image_paths[0] 是原始本地文件，用于上报和持久化（非压缩 data URL）
-                await self.enforce_penalty(event, str(image_paths[0]), is_group, reason_str)
+                await self.enforce_penalty(
+                    event,
+                    str(image_paths[0]),
+                    is_group,
+                    reason_str,
+                    audit_tags,
+                )
 
         except Exception as e:
             logger.error(f"[ImageGuard] Check failed: {e}")
@@ -383,7 +440,14 @@ class ImageGuard(Star):
 
     # ── 判罚执行 ────────────────────────────────────────────────
 
-    async def enforce_penalty(self, event: AstrMessageEvent, violation_img_url: str, is_group: bool, reason: str):
+    async def enforce_penalty(
+        self,
+        event: AstrMessageEvent,
+        violation_img_url: str,
+        is_group: bool,
+        reason: str,
+        tags: list[str] | None = None,
+    ):
         """执行判罚 (依赖 OneBot 协议)"""
         user_id = event.get_sender_id()
         group_id = event.get_group_id()
@@ -469,7 +533,7 @@ class ImageGuard(Star):
         try:
             await self._save_audit_record(
                 event, violation_img_url, reason,
-                recalled, banned, duration, is_group,
+                recalled, banned, duration, is_group, tags,
             )
         except Exception as e:
             logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
@@ -534,6 +598,7 @@ class ImageGuard(Star):
         banned: bool,
         duration: int,
         is_group: bool,
+        tags: list[str] | None = None,
     ) -> None:
         record = {
             "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
@@ -543,6 +608,7 @@ class ImageGuard(Star):
             "group_id": event.get_group_id() or "",
             "image_url": image_url,
             "reason": reason,
+            "tags": _normalize_audit_tags(tags),
             "recalled": recalled,
             "banned": banned,
             "ban_duration": duration,
@@ -626,6 +692,9 @@ class ImageGuard(Star):
         records = await self.get_kv_data("audit_history", [])
         if not isinstance(records, list):
             records = []
+        for record in records:
+            if isinstance(record, dict):
+                record["tags"] = _normalize_audit_tags(record.get("tags"))
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}

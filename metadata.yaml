@@ -1,6 +1,6 @@
 name: astrbot_plugin_image_guard
-version: 1.7.1
-desc: 基于多模态 LLM 的图片内容审查卫士。v1.7.1 修复审核历史缩略图在 AstrBot 页面中的资源重写问题。
+version: 1.7.2
+desc: 基于多模态 LLM 的图片内容审查卫士。v1.7.2 为违规图片生成审核标签并支持 WebUI 筛选。
 author: YEZI
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
 # Python 依赖：pillow (PIL)、httpx
