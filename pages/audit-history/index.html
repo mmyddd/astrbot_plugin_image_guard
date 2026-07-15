@@ -2072,16 +2072,16 @@ function renderProviderStats(stats) {
     container.innerHTML = emptySideState("暂无供应商调用数据");
     return;
   }
-  const maxValue = Math.max(...entries.map(entry => Number(entry[1]) || 0), 1);
+  const totalValue = entries.reduce((sum, [, count]) => sum + (Number(count) || 0), 0);
   container.innerHTML = entries.map(([name, count]) => {
     const safeCount = Number(count) || 0;
-    const percent = Math.round(safeCount / maxValue * 100);
+    const percent = totalValue > 0 ? Math.round(safeCount / totalValue * 100) : 0;
     return `
       <div class="provider-row">
         <span class="provider-dot" aria-hidden="true"></span>
         <div class="provider-copy">
           <span class="provider-name" title="${escHtml(name)}">${escHtml(name)}</span>
-          <span class="provider-subtitle">调用占比 ${percent}%</span>
+          <span class="provider-subtitle">总调用占比 ${percent}%</span>
           <div class="provider-bar" aria-hidden="true"><div class="provider-bar-fill" style="width:${percent}%"></div></div>
         </div>
         <strong class="provider-count">${formatNumber(safeCount)}</strong>
@@ -2148,7 +2148,7 @@ function renderTagFilters() {
   const tagEntries = [...counts.entries()].sort((a, b) =>
     b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN")
   );
-  if (activeTagFilter && !counts.has(activeTagFilter)) activeTagFilter = "";
+  if (allRecords.length && activeTagFilter && !counts.has(activeTagFilter)) activeTagFilter = "";
 
   const buttons = [
     `<button class="tag-filter-button${activeTagFilter ? "" : " active"}" type="button" data-tag-filter="" aria-pressed="${activeTagFilter ? "false" : "true"}"><span>全部记录</span><span class="tag-filter-count">${formatNumber(allRecords.length)}</span></button>`
