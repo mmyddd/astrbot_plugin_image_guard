@@ -148,7 +148,7 @@
     color: var(--surface);
     font-size: 12px;
     font-weight: 800;
-    letter-spacing: .04em;
+    letter-spacing: 0;
   }
   .brand-copy { min-width: 0; }
   .brand-title {
@@ -157,7 +157,7 @@
     color: var(--text);
     font-size: 15px;
     font-weight: 750;
-    letter-spacing: .01em;
+    letter-spacing: 0;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -289,7 +289,7 @@
     color: var(--text-faint);
     font-size: 10px;
     font-weight: 800;
-    letter-spacing: .1em;
+    letter-spacing: 0;
     text-transform: uppercase;
   }
   .nav-group + .nav-group { margin-top: 22px; }
@@ -371,7 +371,7 @@
     color: var(--text);
     font-size: 25px;
     font-weight: 760;
-    letter-spacing: -.02em;
+    letter-spacing: 0;
     line-height: 1.1;
     text-wrap: balance;
   }
@@ -424,7 +424,7 @@
     font-size: 25px;
     font-weight: 780;
     font-variant-numeric: tabular-nums;
-    letter-spacing: -.02em;
+    letter-spacing: 0;
     line-height: 1;
   }
   .metric-hint {
@@ -595,7 +595,7 @@
     color: var(--text-muted);
     font-size: 10px;
     font-weight: 800;
-    letter-spacing: .04em;
+    letter-spacing: 0;
     text-transform: uppercase;
     white-space: nowrap;
   }
@@ -1573,14 +1573,14 @@
   </div>
 </div>
 
-<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="审核图片预览" aria-hidden="true">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="审核图片预览" aria-hidden="true" hidden>
   <div class="lightbox-content">
     <button class="lightbox-close" id="lightbox-close" type="button">关闭</button>
     <img id="lightbox-img" src="" alt="审核图片预览" width="960" height="720">
   </div>
 </div>
 
-<div class="dialog-overlay" id="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-msg" aria-hidden="true">
+<div class="dialog-overlay" id="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-msg" aria-hidden="true" hidden>
   <div class="dialog-box" tabindex="-1">
     <h2 id="dialog-title">确认操作</h2>
     <p class="dialog-message" id="dialog-msg"></p>
@@ -1602,6 +1602,8 @@ let configLoaded = false;
 let configDirty = false;
 let lastCacheStats = {};
 let lastStorageSize = {};
+let lastRouteHash = "";
+let routeGuardInProgress = false;
 let dialogResolve = null;
 let dialogPreviousFocus = null;
 let lightboxPreviousFocus = null;
@@ -1728,6 +1730,36 @@ function applyRoute() {
     }
   }
   if (currentView === "records" && !recordsLoading) renderFullRecordsTable();
+  if (!routeGuardInProgress) lastRouteHash = getCanonicalRouteHash();
+}
+
+function getCanonicalRouteHash() {
+  if (currentView === "config") return "#config-" + currentConfigSection;
+  if (currentView === "records" && currentPage > 1) return "#records-page-" + currentPage;
+  return "#" + currentView;
+}
+
+function handleHashChange() {
+  const nextHash = window.location.hash || "#overview";
+  if (routeGuardInProgress) {
+    routeGuardInProgress = false;
+    lastRouteHash = nextHash;
+    applyRoute();
+    return;
+  }
+  if (configDirty && currentView === "config" && nextHash !== lastRouteHash) {
+    const previousHash = lastRouteHash || getCanonicalRouteHash();
+    window.history.replaceState(null, "", previousHash);
+    showConfirm("当前配置有未保存修改，确定放弃并离开此区域？").then(confirmed => {
+      if (!confirmed) return;
+      configDirty = false;
+      routeGuardInProgress = true;
+      window.location.hash = nextHash;
+    });
+    return;
+  }
+  lastRouteHash = nextHash;
+  applyRoute();
 }
 
 function navigateTo(view, section) {
@@ -1739,7 +1771,7 @@ function switchTab(name) {
 }
 
 function initializeNavigation() {
-  window.addEventListener("hashchange", applyRoute);
+  window.addEventListener("hashchange", handleHashChange);
   document.getElementById("top-refresh").addEventListener("click", refresh);
   document.getElementById("overview-refresh").addEventListener("click", refresh);
   document.getElementById("records-refresh").addEventListener("click", refresh);
@@ -1761,7 +1793,9 @@ function initializeNavigation() {
   });
   bindConfigDirtyTracking();
   bindNavigationGuards();
+  lastRouteHash = window.location.hash || "#overview";
   applyRoute();
+  lastRouteHash = getCanonicalRouteHash();
 }
 
 function bindConfigDirtyTracking() {
@@ -1780,7 +1814,7 @@ function markConfigDirty() {
 function bindNavigationGuards() {
   document.querySelectorAll('a[href^="#"]').forEach(link => {
     link.addEventListener("click", async event => {
-      if (!configDirty || currentView !== "config") return;
+      if (link.classList.contains("skip-link") || !configDirty || currentView !== "config") return;
       const target = link.getAttribute("href");
       if (!target || target === window.location.hash) return;
       event.preventDefault();
@@ -1815,7 +1849,8 @@ ready(async () => {
 async function loadRecords() {
   if (!isEmbedded() || recordsLoading) return;
   recordsLoading = true;
-  currentPage = 1;
+  const route = getRoute();
+  currentPage = currentView === "records" ? route.page : 1;
   setDataStatus("正在加载数据…", "loading");
   renderRecordState("loading", "正在读取审核记录…", "正在同步审核历史、供应商统计和审核缓存…");
   try {
@@ -1920,6 +1955,7 @@ function renderFullRecordsTable() {
   if (!allRecords.length) {
     setTableState(tbody, 8, "empty", "暂无审核记录", "当前没有可展示的历史记录。");
     document.getElementById("pagination").innerHTML = "";
+    syncRecordsPageRoute();
     return;
   }
   const totalPages = Math.max(1, Math.ceil(allRecords.length / PAGE_SIZE));
@@ -1929,6 +1965,15 @@ function renderFullRecordsTable() {
   tbody.innerHTML = page.map(record => renderRecordRow(record, false)).join("");
   bindRecordActions(tbody);
   renderPagination(totalPages);
+  syncRecordsPageRoute();
+}
+
+function syncRecordsPageRoute() {
+  if (currentView !== "records") return;
+  const expectedHash = currentPage > 1 ? "#records-page-" + currentPage : "#records";
+  if (window.location.hash !== expectedHash) {
+    window.history.replaceState(null, "", expectedHash);
+  }
 }
 
 function renderRecordRow(record, compact) {
@@ -2093,6 +2138,7 @@ function preview(url, trigger) {
   lightboxPreviousFocus = trigger || document.activeElement;
   const lightbox = document.getElementById("lightbox");
   document.getElementById("lightbox-img").src = url;
+  lightbox.removeAttribute("hidden");
   lightbox.classList.add("open");
   lightbox.setAttribute("aria-hidden", "false");
   document.getElementById("lightbox-close").focus();
@@ -2102,6 +2148,7 @@ function closeLightbox() {
   const lightbox = document.getElementById("lightbox");
   lightbox.classList.remove("open");
   lightbox.setAttribute("aria-hidden", "true");
+  lightbox.setAttribute("hidden", "");
   document.getElementById("lightbox-img").src = "";
   if (lightboxPreviousFocus && typeof lightboxPreviousFocus.focus === "function") lightboxPreviousFocus.focus();
   lightboxPreviousFocus = null;
@@ -2121,6 +2168,7 @@ function showDialog(message, buttons) {
       button.addEventListener("click", () => closeDialog(buttons[Number(button.dataset.dialogIndex)].value));
     });
     const overlay = document.getElementById("dialog-overlay");
+    overlay.removeAttribute("hidden");
     overlay.classList.add("open");
     overlay.setAttribute("aria-hidden", "false");
     window.requestAnimationFrame(() => buttonsContainer.querySelector("button")?.focus());
@@ -2134,6 +2182,7 @@ function closeDialog(value) {
   const overlay = document.getElementById("dialog-overlay");
   overlay.classList.remove("open");
   overlay.setAttribute("aria-hidden", "true");
+  overlay.setAttribute("hidden", "");
   resolve(value);
   if (dialogPreviousFocus && typeof dialogPreviousFocus.focus === "function") dialogPreviousFocus.focus();
   dialogPreviousFocus = null;
@@ -2150,7 +2199,9 @@ function showConfirm(message) {
   ]);
 }
 
-function openPluginConfig() {
+async function openPluginConfig() {
+  if (configDirty && !(await showConfirm("当前配置有未保存修改，确定放弃并打开插件配置页？"))) return;
+  configDirty = false;
   window.parent.postMessage({
     channel: "astrbot-plugin-page",
     type: "navigate",
@@ -2337,6 +2388,22 @@ function formatBytes(bytes) {
   return (value / 1048576).toFixed(2) + " MB";
 }
 
+function trapFocus(container, event) {
+  const focusable = Array.from(container.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter(element => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 document.addEventListener("keydown", event => {
   if (event.key === "Escape") {
     if (document.getElementById("lightbox").classList.contains("open")) {
@@ -2345,17 +2412,11 @@ document.addEventListener("keydown", event => {
       closeDialog(false);
     }
   }
-  if (event.key === "Tab" && dialogResolve) {
-    const buttons = Array.from(document.querySelectorAll("#dialog-btns button"));
-    if (!buttons.length) return;
-    const first = buttons[0];
-    const last = buttons[buttons.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
+  if (event.key === "Tab") {
+    if (dialogResolve) {
+      trapFocus(document.getElementById("dialog-overlay"), event);
+    } else if (document.getElementById("lightbox").classList.contains("open")) {
+      trapFocus(document.getElementById("lightbox"), event);
     }
   }
 });
