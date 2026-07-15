@@ -1987,7 +1987,7 @@ function renderRecordRow(record, compact) {
   const imageSize = record.local_image_size ? formatBytes(record.local_image_size) : (imageUrl && !record.local_image_url ? "远程图片" : "");
   const imageHtml = imageUrl ? `
     <button class="image-preview-button" type="button" data-preview="${escAttr(imageUrl)}" aria-label="预览审核图片" title="预览审核图片">
-      <img data-image-src="${escAttr(imageUrl)}" src="" alt="审核图片" width="54" height="54" loading="lazy">
+      <img data-img="${escAttr(imageUrl)}" alt="审核图片" width="54" height="54" loading="lazy">
     </button>
     ${imageSize ? `<span class="image-size">${escHtml(imageSize)}</span>` : ""}
   ` : `<span class="text-muted">无图片</span>`;
@@ -2035,9 +2035,9 @@ function renderActionSummary(record, recallTag, banTag) {
 }
 
 function bindRecordActions(container) {
-  container.querySelectorAll("[data-image-src]").forEach(image => {
-    image.src = image.dataset.imageSrc;
-    image.removeAttribute("data-image-src");
+  container.querySelectorAll("[data-img]").forEach(image => {
+    image.src = image.getAttribute("data-img");
+    image.removeAttribute("data-img");
   });
   container.querySelectorAll("[data-preview]").forEach(button => {
     button.addEventListener("click", () => preview(button.dataset.preview, button));
