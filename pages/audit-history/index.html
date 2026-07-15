@@ -1607,6 +1607,8 @@ let configLoaded = false;
 let configDirty = false;
 let lastCacheStats = {};
 let lastStorageSize = {};
+let previewUrls = new Map();
+let previewKeySeed = 0;
 let lastRouteHash = "";
 let routeGuardInProgress = false;
 let dialogResolve = null;
@@ -1940,6 +1942,8 @@ function emptySideState(message) {
 }
 
 function renderRecords() {
+  previewUrls = new Map();
+  previewKeySeed = 0;
   renderOverviewTable();
   renderFullRecordsTable();
 }
@@ -1990,8 +1994,9 @@ function renderRecordRow(record, compact) {
   const reason = record.reason || "未说明理由";
   const imageUrl = record.local_image_url || record.image_url || "";
   const imageSize = record.local_image_size ? formatBytes(record.local_image_size) : (imageUrl && !record.local_image_url ? "远程图片" : "");
+  const previewKey = imageUrl ? registerPreviewUrl(imageUrl) : "";
   const imageHtml = imageUrl ? `
-    <button class="image-preview-button" type="button" data-preview="${escAttr(imageUrl)}" aria-label="预览审核图片" title="预览审核图片">
+    <button class="image-preview-button" type="button" data-preview-key="${previewKey}" aria-label="预览审核图片" title="预览审核图片">
       <span class="image-placeholder" aria-hidden="true"></span>
     </button>
     ${imageSize ? `<span class="image-size">${escHtml(imageSize)}</span>` : ""}
@@ -2032,6 +2037,12 @@ function renderRecordRow(record, compact) {
   `;
 }
 
+function registerPreviewUrl(url) {
+  const key = "preview-" + (++previewKeySeed);
+  previewUrls.set(key, url);
+  return key;
+}
+
 function renderActionSummary(record, recallTag, banTag) {
   if (record.recalled && record.banned) return '<span class="status-tag success">撤回 + 禁言</span>';
   if (record.recalled) return recallTag;
@@ -2040,17 +2051,19 @@ function renderActionSummary(record, recallTag, banTag) {
 }
 
 function bindRecordActions(container) {
-  container.querySelectorAll("[data-preview]").forEach(button => {
+  container.querySelectorAll("[data-preview-key]").forEach(button => {
+    const imageUrl = previewUrls.get(button.getAttribute("data-preview-key"));
+    if (!imageUrl) return;
     if (!button.querySelector("img")) {
       const image = document.createElement("img");
       image.alt = "审核图片";
       image.width = 54;
       image.height = 54;
       image.loading = "lazy";
-      image.src = button.getAttribute("data-preview");
+      image.src = imageUrl;
       button.replaceChildren(image);
     }
-    button.addEventListener("click", () => preview(button.dataset.preview, button));
+    button.addEventListener("click", () => preview(imageUrl, button));
   });
   container.querySelectorAll("[data-delete-id]").forEach(button => {
     button.addEventListener("click", () => deleteRecord(button.dataset.deleteId));
