@@ -771,6 +771,106 @@
     justify-content: flex-end;
     gap: 8px;
   }
+  .record-search {
+    display: inline-flex;
+    align-items: center;
+    min-width: min(320px, 100%);
+  }
+  .record-search input {
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    outline: 0;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+  }
+  .record-search input::placeholder { color: var(--text-faint); }
+  .record-search input:focus {
+    border-color: var(--focus);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+  }
+  .records-layout {
+    display: grid;
+    grid-template-columns: minmax(172px, 210px) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+  .tag-filter-panel {
+    position: sticky;
+    top: 18px;
+  }
+  .tag-filter-body { padding: 12px; }
+  .tag-filter-list {
+    display: grid;
+    gap: 4px;
+  }
+  .tag-filter-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 33px;
+    padding: 7px 9px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    text-align: left;
+    font-size: 11px;
+    font-weight: 650;
+  }
+  .tag-filter-button:hover {
+    background: var(--surface-muted);
+    color: var(--text);
+  }
+  .tag-filter-button.active {
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+    background: var(--primary-soft);
+    color: var(--primary-strong);
+  }
+  .tag-filter-count {
+    color: var(--text-faint);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tag-filter-button.active .tag-filter-count { color: currentColor; }
+  .tag-filter-empty {
+    padding: 12px 8px;
+    color: var(--text-faint);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .reason-stack {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+  .audit-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .audit-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    max-width: 100%;
+    padding: 3px 6px;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--border));
+    border-radius: 999px;
+    background: var(--primary-soft);
+    color: var(--primary-strong);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .config-layout {
     display: grid;
@@ -1132,8 +1232,23 @@
       align-items: flex-start;
       flex-direction: column;
     }
-    .record-toolbar-actions { width: 100%; justify-content: flex-start; }
+    .record-toolbar-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
+    .record-search { width: 100%; }
     .record-toolbar-actions .btn { flex: 1; }
+    .records-layout { grid-template-columns: 1fr; }
+    .tag-filter-panel { position: static; }
+    .tag-filter-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .tag-filter-button {
+      width: auto;
+      flex: 0 0 auto;
+    }
 
     .table-wrap { overflow: visible; }
     .record-table,
@@ -1186,11 +1301,15 @@
       grid-column: 1 / -1;
       align-items: flex-start;
     }
-    .record-table td[data-label="理由"] .reason-cell {
+    .record-table td[data-label="理由"] .reason-stack {
       max-width: 70%;
-      white-space: normal;
       text-align: right;
     }
+    .record-table td[data-label="理由"] .reason-cell {
+      max-width: none;
+      white-space: normal;
+    }
+    .record-table td[data-label="理由"] .audit-tags { justify-content: flex-end; }
     .record-table td[data-label="操作"] {
       grid-column: 1 / -1;
       justify-content: flex-start;
@@ -1226,7 +1345,7 @@
       <div class="brand-mark" aria-hidden="true">IG</div>
       <div class="brand-copy">
         <span class="brand-title">ImageGuard / 审核控制台</span>
-        <span class="brand-subtitle">图片内容审查卫士 · v1.7.0</span>
+        <span class="brand-subtitle">图片内容审查卫士 · v1.7.2</span>
       </div>
     </div>
     <div class="topbar-actions">
@@ -1372,30 +1491,48 @@
           </div>
         </div>
         <div class="record-toolbar">
-          <p id="record-count-summary">—</p>
+          <p id="record-count-summary" aria-live="polite">—</p>
           <div class="record-toolbar-actions">
+            <label class="record-search">
+              <span class="sr-only">搜索审核记录</span>
+              <input id="record-search" name="record-search" type="search" placeholder="搜索用户、来源、理由或标签…" autocomplete="off">
+            </label>
+            <button class="btn btn-sm" type="button" id="clear-record-filters">清除筛选</button>
             <a class="btn btn-sm" href="#overview">返回概览</a>
           </div>
         </div>
-        <section class="panel" aria-labelledby="records-table-title">
-          <div class="panel-heading">
-            <div>
-              <h2 id="records-table-title">全部历史记录</h2>
-              <p>图片缩略图可打开原图预览，删除仅影响历史记录。</p>
+        <div class="records-layout">
+          <aside class="panel tag-filter-panel" aria-labelledby="tag-filter-title">
+            <div class="panel-heading">
+              <div>
+                <h2 id="tag-filter-title">标签筛选</h2>
+                <p>按内容标签过滤记录</p>
+              </div>
             </div>
-            <span class="panel-heading-meta">每页 15 条</span>
-          </div>
-          <div class="table-wrap">
-            <table class="record-table" id="records-table">
-              <caption class="sr-only">全部审核历史记录</caption>
-              <thead>
-                <tr><th scope="col">时间</th><th scope="col">用户</th><th scope="col">来源</th><th scope="col">理由</th><th scope="col">图片</th><th scope="col">撤回</th><th scope="col">禁言</th><th scope="col">操作</th></tr>
-              </thead>
-              <tbody id="records-tbody"></tbody>
-            </table>
-          </div>
-          <div class="pagination" id="pagination" aria-label="审核记录分页"></div>
-        </section>
+            <div class="tag-filter-body">
+              <div class="tag-filter-list" id="tag-filter-list"></div>
+            </div>
+          </aside>
+          <section class="panel" aria-labelledby="records-table-title">
+            <div class="panel-heading">
+              <div>
+                <h2 id="records-table-title">全部历史记录</h2>
+                <p>图片缩略图可打开原图预览，删除仅影响历史记录。</p>
+              </div>
+              <span class="panel-heading-meta">每页 15 条</span>
+            </div>
+            <div class="table-wrap">
+              <table class="record-table" id="records-table">
+                <caption class="sr-only">全部审核历史记录</caption>
+                <thead>
+                  <tr><th scope="col">时间</th><th scope="col">用户</th><th scope="col">来源</th><th scope="col">理由</th><th scope="col">图片</th><th scope="col">撤回</th><th scope="col">禁言</th><th scope="col">操作</th></tr>
+                </thead>
+                <tbody id="records-tbody"></tbody>
+              </table>
+            </div>
+            <div class="pagination" id="pagination" aria-label="审核记录分页"></div>
+          </section>
+        </div>
       </section>
 
       <section class="view" id="view-config" data-view-panel="config" aria-labelledby="config-title">
@@ -1596,6 +1733,7 @@
 <script>
 const PAGE_SIZE = 15;
 let allRecords = [];
+let filteredRecords = [];
 let currentPage = 1;
 let fullConfig = {};
 let currentView = "overview";
@@ -1609,6 +1747,8 @@ let lastCacheStats = {};
 let lastStorageSize = {};
 let previewUrls = new Map();
 let previewKeySeed = 0;
+let activeTagFilter = "";
+let recordSearchQuery = "";
 let lastRouteHash = "";
 let routeGuardInProgress = false;
 let dialogResolve = null;
@@ -1668,34 +1808,52 @@ function setConfigStatus(text, state) {
 
 function getRoute() {
   const raw = (window.location.hash || "").replace(/^#/, "");
-  if (raw.indexOf("config-") === 0) {
-    const section = raw.slice("config-".length);
+  const [path, queryString = ""] = raw.split("?", 2);
+  const params = new URLSearchParams(queryString);
+  if (path.indexOf("config-") === 0) {
+    const section = path.slice("config-".length);
     return {
       view: "config",
       section: ["rules", "providers", "scope", "media"].includes(section) ? section : "rules",
-      page: 1
+      page: 1,
+      tag: "",
+      query: ""
     };
   }
-  const recordsMatch = raw.match(/^records(?:-page-(\d+))?$/);
+  const recordsMatch = path.match(/^records(?:-page-(\d+))?$/);
   if (recordsMatch) {
     return {
       view: "records",
       section: "rules",
-      page: Math.max(1, Number(recordsMatch[1]) || 1)
+      page: Math.max(1, Number(recordsMatch[1]) || 1),
+      tag: params.get("tag") || "",
+      query: params.get("q") || ""
     };
   }
   return {
-    view: ["overview", "records", "config"].includes(raw) ? raw : "overview",
+    view: ["overview", "records", "config"].includes(path) ? path : "overview",
     section: "rules",
-    page: 1
+    page: 1,
+    tag: "",
+    query: ""
   };
+}
+
+function getRecordFilterSuffix() {
+  const params = new URLSearchParams();
+  if (activeTagFilter) params.set("tag", activeTagFilter);
+  const searchInput = document.getElementById("record-search");
+  const query = searchInput ? searchInput.value.trim() : recordSearchQuery;
+  if (query) params.set("q", query);
+  const serialized = params.toString();
+  return serialized ? "?" + serialized : "";
 }
 
 function updateRoute(view, section, page) {
   const nextHash = view === "config"
     ? "#config-" + (section || "rules")
-    : view === "records" && Number(page) > 1
-      ? "#records-page-" + Number(page)
+    : view === "records"
+      ? "#records" + (Number(page) > 1 ? "-page-" + Number(page) : "") + getRecordFilterSuffix()
       : "#" + view;
   if (window.location.hash === nextHash) {
     applyRoute();
@@ -1708,7 +1866,13 @@ function applyRoute() {
   const route = getRoute();
   currentView = route.view;
   currentConfigSection = route.section;
-  if (currentView === "records") currentPage = route.page;
+  if (currentView === "records") {
+    currentPage = route.page;
+    activeTagFilter = route.tag;
+    const searchInput = document.getElementById("record-search");
+    if (searchInput && searchInput.value !== route.query) searchInput.value = route.query;
+    recordSearchQuery = route.query.toLocaleLowerCase();
+  }
 
   document.querySelectorAll("[data-view-panel]").forEach(panel => {
     panel.classList.toggle("active", panel.dataset.viewPanel === currentView);
@@ -1736,13 +1900,15 @@ function applyRoute() {
       window.requestAnimationFrame(() => section.scrollIntoView({ block: "start", behavior: "smooth" }));
     }
   }
-  if (currentView === "records" && !recordsLoading) renderFullRecordsTable();
+  if (currentView === "records" && !recordsLoading) applyRecordFilters(false);
   if (!routeGuardInProgress) lastRouteHash = getCanonicalRouteHash();
 }
 
 function getCanonicalRouteHash() {
   if (currentView === "config") return "#config-" + currentConfigSection;
-  if (currentView === "records" && currentPage > 1) return "#records-page-" + currentPage;
+  if (currentView === "records") {
+    return "#records" + (currentPage > 1 ? "-page-" + currentPage : "") + getRecordFilterSuffix();
+  }
   return "#" + currentView;
 }
 
@@ -1783,6 +1949,8 @@ function initializeNavigation() {
   document.getElementById("overview-refresh").addEventListener("click", refresh);
   document.getElementById("records-refresh").addEventListener("click", refresh);
   document.getElementById("clear-records").addEventListener("click", clearAll);
+  document.getElementById("clear-record-filters").addEventListener("click", clearRecordFilters);
+  document.getElementById("record-search").addEventListener("input", () => applyRecordFilters());
   document.getElementById("config-reload").addEventListener("click", reloadConfigWithGuard);
   document.getElementById("config-cancel").addEventListener("click", reloadConfigWithGuard);
   document.getElementById("config-save").addEventListener("click", saveConfig);
@@ -1862,7 +2030,12 @@ async function loadRecords() {
   renderRecordState("loading", "正在读取审核记录…", "正在同步审核历史、供应商统计和审核缓存…");
   try {
     const response = await window.AstrBotPluginPage.apiGet("audit/list");
-    allRecords = Array.isArray(response && response.records) ? response.records.slice().reverse() : [];
+    allRecords = Array.isArray(response && response.records)
+      ? response.records.slice().reverse().map(record => ({
+        ...record,
+        tags: normalizeRecordTags(record.tags)
+      }))
+      : [];
     lastCacheStats = response && response.cache_stats || {};
     lastStorageSize = response && response.storage_size || {};
     renderStats(lastCacheStats);
@@ -1941,11 +2114,103 @@ function emptySideState(message) {
   return `<p class="side-footnote" style="margin-top:0">${escHtml(message)}</p>`;
 }
 
+function normalizeRecordTags(value) {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,，、|]\s*/)
+      : [];
+  return [...new Set(values
+    .map(tag => String(tag || "").trim().slice(0, 24))
+    .filter(Boolean))].slice(0, 8);
+}
+
+function getRecordSearchText(record) {
+  return [
+    record.user_name,
+    record.user_id,
+    record.group_id,
+    record.reason,
+    ...normalizeRecordTags(record.tags)
+  ].filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
+function renderTagFilters() {
+  const container = document.getElementById("tag-filter-list");
+  if (!container) return;
+
+  const counts = new Map();
+  allRecords.forEach(record => {
+    normalizeRecordTags(record.tags).forEach(tag => {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    });
+  });
+  const tagEntries = [...counts.entries()].sort((a, b) =>
+    b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN")
+  );
+  if (activeTagFilter && !counts.has(activeTagFilter)) activeTagFilter = "";
+
+  const buttons = [
+    `<button class="tag-filter-button${activeTagFilter ? "" : " active"}" type="button" data-tag-filter="" aria-pressed="${activeTagFilter ? "false" : "true"}"><span>全部记录</span><span class="tag-filter-count">${formatNumber(allRecords.length)}</span></button>`
+  ];
+  buttons.push(...tagEntries.map(([tag, count]) => `
+    <button class="tag-filter-button${activeTagFilter === tag ? " active" : ""}" type="button" data-tag-filter="${escAttr(tag)}" aria-pressed="${activeTagFilter === tag ? "true" : "false"}">
+      <span>${escHtml(tag)}</span><span class="tag-filter-count">${formatNumber(count)}</span>
+    </button>
+  `));
+  container.innerHTML = buttons.length > 1
+    ? buttons.join("")
+    : buttons[0] + '<p class="tag-filter-empty">暂无标签记录</p>';
+
+  container.querySelectorAll("[data-tag-filter]").forEach(button => {
+    button.addEventListener("click", () => {
+      activeTagFilter = button.dataset.tagFilter || "";
+      applyRecordFilters();
+    });
+  });
+}
+
+function applyRecordFilters(resetPage = true) {
+  const searchInput = document.getElementById("record-search");
+  recordSearchQuery = searchInput ? searchInput.value.trim().toLocaleLowerCase() : "";
+  renderTagFilters();
+  filteredRecords = allRecords.filter(record => {
+    const tags = normalizeRecordTags(record.tags);
+    const matchesTag = !activeTagFilter || tags.includes(activeTagFilter);
+    const matchesSearch = !recordSearchQuery || getRecordSearchText(record).includes(recordSearchQuery);
+    return matchesTag && matchesSearch;
+  });
+  if (resetPage) currentPage = 1;
+  updateRecordCountSummary();
+  renderFullRecordsTable();
+}
+
+function clearRecordFilters() {
+  activeTagFilter = "";
+  const searchInput = document.getElementById("record-search");
+  if (searchInput) searchInput.value = "";
+  applyRecordFilters();
+}
+
+function updateRecordCountSummary() {
+  const summary = document.getElementById("record-count-summary");
+  if (!summary) return;
+  if (!allRecords.length) {
+    summary.textContent = "暂无历史记录";
+    return;
+  }
+  if (filteredRecords.length !== allRecords.length) {
+    summary.textContent = `显示 ${formatNumber(filteredRecords.length)} / ${formatNumber(allRecords.length)} 条记录`;
+    return;
+  }
+  summary.textContent = `共 ${formatNumber(allRecords.length)} 条历史记录`;
+}
+
 function renderRecords() {
   previewUrls = new Map();
   previewKeySeed = 0;
   renderOverviewTable();
-  renderFullRecordsTable();
+  applyRecordFilters(false);
 }
 
 function renderOverviewTable() {
@@ -1961,16 +2226,23 @@ function renderOverviewTable() {
 
 function renderFullRecordsTable() {
   const tbody = document.getElementById("records-tbody");
-  if (!allRecords.length) {
-    setTableState(tbody, 8, "empty", "暂无审核记录", "当前没有可展示的历史记录。");
+  if (!filteredRecords.length) {
+    const hasFilters = Boolean(activeTagFilter || recordSearchQuery);
+    setTableState(
+      tbody,
+      8,
+      "empty",
+      hasFilters ? "没有匹配记录" : "暂无审核记录",
+      hasFilters ? "请更换关键词或清除标签筛选。" : "当前没有可展示的历史记录。"
+    );
     document.getElementById("pagination").innerHTML = "";
     syncRecordsPageRoute();
     return;
   }
-  const totalPages = Math.max(1, Math.ceil(allRecords.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
   if (currentPage > totalPages) currentPage = totalPages;
   const start = (currentPage - 1) * PAGE_SIZE;
-  const page = allRecords.slice(start, start + PAGE_SIZE);
+  const page = filteredRecords.slice(start, start + PAGE_SIZE);
   tbody.innerHTML = page.map(record => renderRecordRow(record, false)).join("");
   bindRecordActions(tbody);
   renderPagination(totalPages);
@@ -1979,7 +2251,7 @@ function renderFullRecordsTable() {
 
 function syncRecordsPageRoute() {
   if (currentView !== "records") return;
-  const expectedHash = currentPage > 1 ? "#records-page-" + currentPage : "#records";
+  const expectedHash = getCanonicalRouteHash();
   if (window.location.hash !== expectedHash) {
     window.history.replaceState(null, "", expectedHash);
   }
@@ -1992,6 +2264,10 @@ function renderRecordRow(record, compact) {
   const userId = record.user_id || "";
   const source = record.group_id ? "群 " + record.group_id : "私聊";
   const reason = record.reason || "未说明理由";
+  const tags = normalizeRecordTags(record.tags);
+  const tagsHtml = tags.length
+    ? `<span class="audit-tags" aria-label="内容标签">${tags.map(tag => `<span class="audit-tag" title="${escAttr(tag)}">${escHtml(tag)}</span>`).join("")}</span>`
+    : "";
   const imageUrl = record.local_image_url || record.image_url || "";
   const imageSize = record.local_image_size ? formatBytes(record.local_image_size) : (imageUrl && !record.local_image_url ? "远程图片" : "");
   const previewKey = imageUrl ? registerPreviewUrl(imageUrl) : "";
@@ -2017,7 +2293,7 @@ function renderRecordRow(record, compact) {
       <tr>
         <td data-label="时间"><time class="record-time" title="${escHtml(rawTime)}">${escHtml(time)}</time></td>
         <td data-label="用户" class="user-cell"><span class="user-name">${escHtml(user)}</span><span class="user-id">${escHtml(userId || source)}</span></td>
-        <td data-label="理由"><span class="reason-cell" title="${escHtml(reason)}">${escHtml(reason)}</span></td>
+        <td data-label="理由"><span class="reason-stack"><span class="reason-cell" title="${escHtml(reason)}">${escHtml(reason)}</span>${tagsHtml}</span></td>
         <td data-label="图片" class="image-cell">${imageHtml}</td>
         <td data-label="处理">${renderActionSummary(record, recallTag, banTag)}</td>
       </tr>
@@ -2028,7 +2304,7 @@ function renderRecordRow(record, compact) {
       <td data-label="时间"><time class="record-time" title="${escHtml(rawTime)}">${escHtml(time)}</time></td>
       <td data-label="用户" class="user-cell"><span class="user-name" title="${escHtml(user)}">${escHtml(user)}</span><span class="user-id" title="${escHtml(userId)}">${escHtml(userId)}</span></td>
       <td data-label="来源" class="source-cell">${escHtml(source)}</td>
-      <td data-label="理由"><span class="reason-cell" title="${escHtml(reason)}">${escHtml(reason)}</span></td>
+      <td data-label="理由"><span class="reason-stack"><span class="reason-cell" title="${escHtml(reason)}">${escHtml(reason)}</span>${tagsHtml}</span></td>
       <td data-label="图片" class="image-cell">${imageHtml}</td>
       <td data-label="撤回">${recallTag}</td>
       <td data-label="禁言">${banTag}</td>
@@ -2120,7 +2396,7 @@ function renderRecordError(error) {
 }
 
 function goPage(page) {
-  const totalPages = Math.max(1, Math.ceil(allRecords.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
   currentPage = Math.min(Math.max(1, page), totalPages);
   updateRoute("records", undefined, currentPage);
 }
@@ -2134,6 +2410,11 @@ async function clearAll() {
   try {
     await window.AstrBotPluginPage.apiPost("audit/clear", { _method: "DELETE" });
     allRecords = [];
+    filteredRecords = [];
+    activeTagFilter = "";
+    recordSearchQuery = "";
+    const searchInput = document.getElementById("record-search");
+    if (searchInput) searchInput.value = "";
     currentPage = 1;
     renderStats(lastCacheStats);
     renderRecords();
