@@ -1345,7 +1345,7 @@
       <div class="brand-mark" aria-hidden="true">IG</div>
       <div class="brand-copy">
         <span class="brand-title">ImageGuard / 审核控制台</span>
-        <span class="brand-subtitle">图片内容审查卫士 · v1.7.2</span>
+        <span class="brand-subtitle">图片内容审查卫士 · v1.7.3</span>
       </div>
     </div>
     <div class="topbar-actions">
@@ -1747,6 +1747,8 @@ let lastCacheStats = {};
 let lastStorageSize = {};
 let previewUrls = new Map();
 let previewKeySeed = 0;
+let imageAssetCache = new Map();
+let lightboxRequestId = 0;
 let activeTagFilter = "";
 let recordSearchQuery = "";
 let lastRouteHash = "";
@@ -2030,6 +2032,7 @@ async function loadRecords() {
   renderRecordState("loading", "正在读取审核记录…", "正在同步审核历史、供应商统计和审核缓存…");
   try {
     const response = await window.AstrBotPluginPage.apiGet("audit/list");
+    clearImageAssetCache();
     allRecords = Array.isArray(response && response.records)
       ? response.records.slice().reverse().map(record => ({
         ...record,
@@ -2336,14 +2339,57 @@ function bindRecordActions(container) {
       image.width = 54;
       image.height = 54;
       image.loading = "lazy";
-      image.src = imageUrl;
       button.replaceChildren(image);
+      resolveImageAsset(imageUrl).then(assetUrl => {
+        if (assetUrl && image.isConnected) image.src = assetUrl;
+      }).catch(() => {
+        if (image.isConnected) image.alt = "审核图片加载失败";
+      });
     }
     button.addEventListener("click", () => preview(imageUrl, button));
   });
   container.querySelectorAll("[data-delete-id]").forEach(button => {
     button.addEventListener("click", () => deleteRecord(button.dataset.deleteId));
   });
+}
+
+function isSingleUseFileToken(url) {
+  return typeof url === "string" && /\/api\/file\/[^/?#]+/.test(url);
+}
+
+// AstrBot 的 /api/file token 只允许读取一次；转换为 Blob URL 后，缩略图和灯箱共享同一份内容。
+function resolveImageAsset(url) {
+  if (!url || !isSingleUseFileToken(url)) return Promise.resolve(url);
+  const cached = imageAssetCache.get(url);
+  if (cached) return cached.promise;
+
+  const entry = { promise: null, objectUrl: "" };
+  entry.promise = fetch(url)
+    .then(response => {
+      if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
+      return response.blob();
+    })
+    .then(blob => {
+      entry.objectUrl = URL.createObjectURL(blob);
+      if (imageAssetCache.get(url) !== entry) {
+        URL.revokeObjectURL(entry.objectUrl);
+        return "";
+      }
+      return entry.objectUrl;
+    })
+    .catch(error => {
+      imageAssetCache.delete(url);
+      throw error;
+    });
+  imageAssetCache.set(url, entry);
+  return entry.promise;
+}
+
+function clearImageAssetCache() {
+  imageAssetCache.forEach(entry => {
+    if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+  });
+  imageAssetCache.clear();
 }
 
 function renderPagination(totalPages) {
@@ -2411,6 +2457,7 @@ async function clearAll() {
     await window.AstrBotPluginPage.apiPost("audit/clear", { _method: "DELETE" });
     allRecords = [];
     filteredRecords = [];
+    clearImageAssetCache();
     activeTagFilter = "";
     recordSearchQuery = "";
     const searchInput = document.getElementById("record-search");
@@ -2440,15 +2487,22 @@ async function deleteRecord(id) {
 function preview(url, trigger) {
   if (!url) return;
   lightboxPreviousFocus = trigger || document.activeElement;
-  const lightbox = document.getElementById("lightbox");
-  document.getElementById("lightbox-img").src = url;
-  lightbox.removeAttribute("hidden");
-  lightbox.classList.add("open");
-  lightbox.setAttribute("aria-hidden", "false");
-  document.getElementById("lightbox-close").focus();
+  const requestId = ++lightboxRequestId;
+  resolveImageAsset(url).then(assetUrl => {
+    if (requestId !== lightboxRequestId || !assetUrl) return;
+    const lightbox = document.getElementById("lightbox");
+    document.getElementById("lightbox-img").src = assetUrl;
+    lightbox.removeAttribute("hidden");
+    lightbox.classList.add("open");
+    lightbox.setAttribute("aria-hidden", "false");
+    document.getElementById("lightbox-close").focus();
+  }).catch(() => {
+    if (requestId === lightboxRequestId) setDataStatus("图片加载失败", "error");
+  });
 }
 
 function closeLightbox() {
+  lightboxRequestId += 1;
   const lightbox = document.getElementById("lightbox");
   lightbox.classList.remove("open");
   lightbox.setAttribute("aria-hidden", "true");

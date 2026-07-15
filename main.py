@@ -70,7 +70,7 @@ def _parse_audit_tags(response_text: str) -> list[str]:
     return _normalize_audit_tags(parsed)
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.2")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.3")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
