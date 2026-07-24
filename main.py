@@ -8,6 +8,7 @@ from pathlib import Path
 from .cache import ImageAuditCache
 from .image_processor import (
     compress_image_with_result,
+    encode_image_to_data_url,
     _format_compression_result,
     _save_compressed_image_to_temp,
     _resolve_compressed_image_temp_dir,
@@ -163,7 +164,7 @@ class ImageGuard(Star):
                             logger.info("[ImageGuard] 商城大表情，跳过审核")
                             return
 
-        # === 3. 提取图片路径并过滤 GIF ===
+        # === 3. 提取图片路径 ===
         message_obj = event.message_obj
         if not message_obj.message: return
 
@@ -175,7 +176,7 @@ class ImageGuard(Star):
                 if not img_url:
                     continue
                 path = Path(img_url.replace("file:///", ""))
-                if path.exists() and path.suffix.lower() != ".gif":
+                if path.exists():
                     image_paths.append(path)
 
         if not image_paths: return
@@ -186,7 +187,24 @@ class ImageGuard(Star):
         image_urls = []
         for index, path in enumerate(image_paths, start=1):
             try:
-                result = compress_image_with_result(path.read_bytes(), max_image_bytes)
+                image_bytes = path.read_bytes()
+                if path.suffix.lower() == ".gif":
+                    data_url = encode_image_to_data_url(image_bytes, "image/gif")
+                    data_url_bytes = len(data_url.encode("ascii"))
+                    image_urls.append(data_url)
+                    logger.info(
+                        f"[ImageGuard] GIF 原图发送: 第 {index}/{len(image_paths)} 张，"
+                        f"原图={len(image_bytes)} B，data URL={data_url_bytes} B，"
+                        "状态=保留原始 GIF"
+                    )
+                    if data_url_bytes > max_image_bytes:
+                        logger.warning(
+                            f"[ImageGuard] GIF 原图 data URL 大小 {data_url_bytes} B "
+                            f"超过配置上限 {max_image_bytes} B，保持原始 GIF 继续送审"
+                        )
+                    continue
+
+                result = compress_image_with_result(image_bytes, max_image_bytes)
                 if keep_temp:
                     result = _save_compressed_image_to_temp(
                         result,
@@ -196,7 +214,7 @@ class ImageGuard(Star):
                 image_urls.append(result.data_url)
                 logger.info(_format_compression_result(index, len(image_paths), result))
             except Exception as e:
-                logger.warning(f"[ImageGuard] 压缩图片失败 {path}: {e}")
+                logger.warning(f"[ImageGuard] 处理图片失败 {path}: {e}")
 
         if not image_urls: return
 

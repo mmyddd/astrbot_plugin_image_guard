@@ -48,6 +48,12 @@ class ImageCompressionResult:
     saved_path: str | None
 
 
+def encode_image_to_data_url(image_bytes: bytes, mime_type: str) -> str:
+    """将原始图片字节编码为指定 MIME 类型的 data URL。"""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
 def compress_image_to_data_url(image_bytes: bytes, max_bytes: int) -> str:
     return compress_image_with_result(image_bytes, max_bytes).data_url
 
@@ -85,8 +91,8 @@ async def prepare_audit_images(
     """（旧版异步路径）从 URL 列表下载并压缩图片为 data URL。
 
     .. note::
-       main.py 当前不使用此函数——它直接通过 ``Path.read_bytes()`` + 
-       ``compress_image_with_result`` 同步处理本地文件。
+       main.py 当前不使用此函数——它直接通过 ``Path.read_bytes()`` 同步处理本地文件，
+       静态图片调用 ``compress_image_with_result``，GIF 保留原始字节。
        此函数保留为 legacy/alternate 入口，用于远程 URL 批量处理场景。
     """
     prepared_urls = []
