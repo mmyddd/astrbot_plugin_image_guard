@@ -113,12 +113,12 @@
     "default": 120.0
   },
   "compressed_image_max_bytes": {
-    "description": "发送给大模型审核前的普通图片压缩上限（字节）。默认 1048576，即 1MB；GIF 会保留原始字节发送，不受此上限限制。",
+    "description": "发送给大模型审核前的图片 data URL 压缩上限（字节）。默认 1048576，即 1MB；GIF 会保留动画并按需减少颜色、尺寸或帧数。",
     "type": "int",
     "default": 1048576
   },
   "keep_compressed_image_in_temp": {
-    "description": "调试开关。开启后会把每张压缩后的普通图片 JPEG 保留到 AstrBot 的 data/temp/astrbot_plugin_image_guard 子目录，并在压缩结果日志中输出文件路径；GIF 原图不适用此选项。",
+    "description": "调试开关。开启后会把每张压缩后的 JPEG 或 GIF 保留到 AstrBot 的 data/temp/astrbot_plugin_image_guard 子目录，并在压缩结果日志中输出文件路径。",
     "type": "bool",
     "default": false
   },

@@ -8,7 +8,6 @@ from pathlib import Path
 from .cache import ImageAuditCache
 from .image_processor import (
     compress_image_with_result,
-    encode_image_to_data_url,
     _format_compression_result,
     _save_compressed_image_to_temp,
     _resolve_compressed_image_temp_dir,
@@ -188,22 +187,6 @@ class ImageGuard(Star):
         for index, path in enumerate(image_paths, start=1):
             try:
                 image_bytes = path.read_bytes()
-                if path.suffix.lower() == ".gif":
-                    data_url = encode_image_to_data_url(image_bytes, "image/gif")
-                    data_url_bytes = len(data_url.encode("ascii"))
-                    image_urls.append(data_url)
-                    logger.info(
-                        f"[ImageGuard] GIF 原图发送: 第 {index}/{len(image_paths)} 张，"
-                        f"原图={len(image_bytes)} B，data URL={data_url_bytes} B，"
-                        "状态=保留原始 GIF"
-                    )
-                    if data_url_bytes > max_image_bytes:
-                        logger.warning(
-                            f"[ImageGuard] GIF 原图 data URL 大小 {data_url_bytes} B "
-                            f"超过配置上限 {max_image_bytes} B，保持原始 GIF 继续送审"
-                        )
-                    continue
-
                 result = compress_image_with_result(image_bytes, max_image_bytes)
                 if keep_temp:
                     result = _save_compressed_image_to_temp(

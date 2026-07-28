@@ -14,7 +14,9 @@ from PIL import ImageOps
 
 
 JPEG_DATA_URL_PREFIX: Final = "data:image/jpeg;base64,"
+GIF_DATA_URL_PREFIX: Final = "data:image/gif;base64,"
 JPEG_QUALITIES: Final = (90, 80, 70, 60, 50, 40, 30, 20)
+GIF_COLOR_COUNTS: Final = (256, 128, 64, 32)
 
 CompressionLogWriter = Callable[[str], None]
 
@@ -46,6 +48,9 @@ class ImageCompressionResult:
     quality: int
     max_data_url_bytes: int
     saved_path: str | None
+    output_format: str = "JPEG"
+    original_frames: int = 1
+    compressed_frames: int = 1
 
 
 def encode_image_to_data_url(image_bytes: bytes, mime_type: str) -> str:
@@ -60,9 +65,12 @@ def compress_image_to_data_url(image_bytes: bytes, max_bytes: int) -> str:
 
 def compress_image_with_result(image_bytes: bytes, max_bytes: int) -> ImageCompressionResult:
     raw = PillowImage.open(io.BytesIO(image_bytes))
+    if raw.format == "GIF":
+        return _compress_gif_with_result(raw, image_bytes, max_bytes)
+
     image = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
     original_width, original_height = image.size
-    image_max_bytes = max(1, ((max_bytes - len(JPEG_DATA_URL_PREFIX)) * 3) // 4)
+    image_max_bytes = _max_raw_bytes_for_data_url(max_bytes, JPEG_DATA_URL_PREFIX)
     compressed = _compress_jpeg(image, image_max_bytes)
     encoded = base64.b64encode(compressed.data).decode("ascii")
     data_url = f"{JPEG_DATA_URL_PREFIX}{encoded}"
@@ -81,6 +89,49 @@ def compress_image_with_result(image_bytes: bytes, max_bytes: int) -> ImageCompr
     )
 
 
+def _compress_gif_with_result(
+    raw: PillowImage.Image,
+    image_bytes: bytes,
+    max_bytes: int,
+) -> ImageCompressionResult:
+    original_width, original_height = raw.size
+    original_frames = getattr(raw, "n_frames", 1)
+    loop_value = raw.info.get("loop")
+    loop = int(loop_value) if loop_value is not None else None
+    frames: list[PillowImage.Image] = []
+    durations: list[int] = []
+    for frame_index in range(original_frames):
+        raw.seek(frame_index)
+        frames.append(raw.convert("RGBA").copy())
+        durations.append(int(raw.info.get("duration", 100)))
+
+    image_max_bytes = _max_raw_bytes_for_data_url(max_bytes, GIF_DATA_URL_PREFIX)
+    compressed, width, height, colors, compressed_durations = _compress_gif(
+        frames,
+        durations,
+        loop,
+        image_max_bytes,
+    )
+    encoded = base64.b64encode(compressed).decode("ascii")
+    data_url = f"{GIF_DATA_URL_PREFIX}{encoded}"
+    return ImageCompressionResult(
+        data_url=data_url,
+        original_bytes=len(image_bytes),
+        jpeg_bytes=len(compressed),
+        data_url_bytes=len(data_url.encode("ascii")),
+        original_width=original_width,
+        original_height=original_height,
+        compressed_width=width,
+        compressed_height=height,
+        quality=colors,
+        max_data_url_bytes=max_bytes,
+        saved_path=None,
+        output_format="GIF",
+        original_frames=original_frames,
+        compressed_frames=len(compressed_durations),
+    )
+
+
 async def prepare_audit_images(
     image_urls: list[str],
     max_bytes: int,
@@ -92,7 +143,7 @@ async def prepare_audit_images(
 
     .. note::
        main.py 当前不使用此函数——它直接通过 ``Path.read_bytes()`` 同步处理本地文件，
-       静态图片调用 ``compress_image_with_result``，GIF 保留原始字节。
+       静态图片和 GIF 均调用 ``compress_image_with_result``；GIF 会保留动画。
        此函数保留为 legacy/alternate 入口，用于远程 URL 批量处理场景。
     """
     prepared_urls = []
@@ -138,7 +189,8 @@ def _save_compressed_image_to_temp(
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     digest = blake2s(image_url.encode("utf-8"), digest_size=4).hexdigest()
-    file_path = temp_dir / f"image_guard_{timestamp}_{digest}.jpg"
+    suffix = ".gif" if compression_result.output_format == "GIF" else ".jpg"
+    file_path = temp_dir / f"image_guard_{timestamp}_{digest}{suffix}"
     file_path.write_bytes(base64.b64decode(compression_result.data_url.split(",", 1)[1]))
 
     return ImageCompressionResult(
@@ -153,6 +205,9 @@ def _save_compressed_image_to_temp(
         quality=compression_result.quality,
         max_data_url_bytes=compression_result.max_data_url_bytes,
         saved_path=str(file_path),
+        output_format=compression_result.output_format,
+        original_frames=compression_result.original_frames,
+        compressed_frames=compression_result.compressed_frames,
     )
 
 
@@ -160,6 +215,11 @@ def _resolve_compressed_image_temp_dir(compressed_image_temp_dir: Path | None) -
     if compressed_image_temp_dir:
         return compressed_image_temp_dir
     return Path("data") / "temp" / "astrbot_plugin_image_guard"
+
+
+def _max_raw_bytes_for_data_url(max_bytes: int, prefix: str) -> int:
+    available_base64_bytes = max(0, max_bytes - len(prefix))
+    return max(1, (available_base64_bytes // 4) * 3)
 
 
 def _compress_jpeg(image: PillowImage.Image, max_bytes: int) -> JpegCompressionResult:
@@ -193,6 +253,100 @@ def _compress_jpeg(image: PillowImage.Image, max_bytes: int) -> JpegCompressionR
         )
 
 
+def _compress_gif(
+    frames: list[PillowImage.Image],
+    durations: list[int],
+    loop: int | None,
+    max_bytes: int,
+) -> tuple[bytes, int, int, int, list[int]]:
+    current_frames = frames
+    current_durations = durations
+
+    while True:
+        smallest = b""
+        selected_colors = GIF_COLOR_COUNTS[-1]
+        for colors in GIF_COLOR_COUNTS:
+            encoded = _encode_gif(current_frames, current_durations, loop, colors)
+            if not smallest or len(encoded) < len(smallest):
+                smallest = encoded
+                selected_colors = colors
+            if len(encoded) <= max_bytes:
+                width, height = current_frames[0].size
+                return encoded, width, height, colors, current_durations
+
+        width, height = current_frames[0].size
+        if len(current_frames) > 1 and (
+            width <= 1 or height <= 1 or max_bytes / len(smallest) < 0.25
+        ):
+            current_frames, current_durations = _halve_gif_frames(
+                current_frames,
+                current_durations,
+            )
+            continue
+
+        if width <= 1 and height <= 1:
+            return smallest, width, height, selected_colors, current_durations
+
+        shrink_ratio = min(0.9, math.sqrt(max_bytes / len(smallest)) * 0.9)
+        next_width = max(1, int(width * shrink_ratio))
+        next_height = max(1, int(height * shrink_ratio))
+        current_frames = [
+            frame.resize(
+                (next_width, next_height),
+                resample=PillowImage.Resampling.LANCZOS,
+            )
+            for frame in current_frames
+        ]
+
+
+def _encode_gif(
+    frames: list[PillowImage.Image],
+    durations: list[int],
+    loop: int | None,
+    colors: int,
+) -> bytes:
+    palette_frames = [_quantize_gif_frame(frame, colors) for frame in frames]
+    buffer = io.BytesIO()
+    save_options = {
+        "format": "GIF",
+        "save_all": True,
+        "append_images": palette_frames[1:],
+        "duration": durations,
+        "disposal": 2,
+        "optimize": True,
+        "transparency": 255,
+    }
+    if loop is not None:
+        save_options["loop"] = loop
+    palette_frames[0].save(buffer, **save_options)
+    return buffer.getvalue()
+
+
+def _quantize_gif_frame(image: PillowImage.Image, colors: int) -> PillowImage.Image:
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    quantized = rgba.convert("RGB").quantize(
+        colors=min(colors, 255),
+        method=PillowImage.Quantize.MEDIANCUT,
+    )
+    transparent = alpha.point(lambda value: 255 if value <= 127 else 0)
+    quantized.paste(255, mask=transparent)
+    quantized.info["transparency"] = 255
+    return quantized
+
+
+def _halve_gif_frames(
+    frames: list[PillowImage.Image],
+    durations: list[int],
+) -> tuple[list[PillowImage.Image], list[int]]:
+    reduced_frames: list[PillowImage.Image] = []
+    reduced_durations: list[int] = []
+    for index in range(0, len(frames), 2):
+        reduced_frames.append(frames[index])
+        reduced_durations.append(sum(durations[index : index + 2]))
+    return reduced_frames, reduced_durations
+
+
 def _smallest_quality_jpeg(image: PillowImage.Image, max_bytes: int) -> JpegEncodeResult:
     smallest = _encode_jpeg(image, JPEG_QUALITIES[0])
     if len(smallest.data) <= max_bytes:
@@ -221,14 +375,21 @@ def _format_compression_result(
 ) -> str:
     status = "达标" if result.data_url_bytes <= result.max_data_url_bytes else "超限"
     saved_path_text = f"，保留文件={result.saved_path}" if result.saved_path else ""
+    animation_text = ""
+    quality_text = f"质量={result.quality}"
+    if result.output_format == "GIF":
+        animation_text = (
+            f"，帧数={result.original_frames}->{result.compressed_frames}"
+        )
+        quality_text = f"颜色数<={result.quality}"
     return (
         "[ImageGuard] 图片压缩结果: "
         f"第 {image_index}/{total_images} 张，"
         f"原图={result.original_width}x{result.original_height}/{_format_bytes(result.original_bytes)}，"
         f"送审={result.compressed_width}x{result.compressed_height}/"
-        f"JPEG {_format_bytes(result.jpeg_bytes)}/"
+        f"{result.output_format} {_format_bytes(result.jpeg_bytes)}/"
         f"data URL {_format_bytes(result.data_url_bytes)}，"
-        f"质量={result.quality}，"
+        f"{quality_text}{animation_text}，"
         f"上限={_format_bytes(result.max_data_url_bytes)}，"
         f"处理后占原图={_format_percent(result.data_url_bytes, result.original_bytes)}，"
         f"状态={status}"
