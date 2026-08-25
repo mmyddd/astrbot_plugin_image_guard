@@ -364,11 +364,7 @@ class ImageGuard(Star):
         raise RuntimeError("没有可用的供应商配置")
 
     async def _call_single_api(self, prompt: str, image_urls: list[str], provider: dict) -> str | None:
-        """调用单个 OpenAI 兼容 API 进行审核（流式传输）。
-
-        使用 Server-Sent Events（SSE）流式接收响应，边收边拼接，避免等待完整响应体，
-        对大模型或思考链较长的场景可更快感知首字节、降低超时风险。
-        若服务端不支持流式（返回 4xx/5xx 或不支持的 content-type），会自动回退到非流式请求。
+        """调用单个 OpenAI 兼容 API 进行审核。
 
         Args:
             provider: 供应商配置字典，包含 api_key / base_url / model / name 等字段。
@@ -396,163 +392,19 @@ class ImageGuard(Star):
             })
 
         timeout_seconds = float(self.config.get("llm_timeout_seconds", 120))
-        payload_stream = {
-            "model": model_name or "gpt-4o",
-            "messages": messages,
-            "max_tokens": int(self.config.get("llm_max_tokens", 512)),
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        payload_sync = {
+        payload = {
             "model": model_name or "gpt-4o",
             "messages": messages,
             "max_tokens": int(self.config.get("llm_max_tokens", 512)),
         }
         reasoning_effort = self.config.get("reasoning_effort", "")
         if reasoning_effort:
-            payload_stream["reasoning_effort"] = reasoning_effort
-            payload_sync["reasoning_effort"] = reasoning_effort
+            payload["reasoning_effort"] = reasoning_effort
 
-        url = f"{base_url.rstrip('/')}/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}"}
-
-        # ── 优先尝试流式 ──
-        try:
-            return await self._call_single_api_stream(
-                url=url,
-                headers=headers,
-                payload=payload_stream,
-                timeout_seconds=timeout_seconds,
-                api_name=api_name,
-            )
-        except Exception as stream_exc:
-            err_text = str(stream_exc).lower()
-            logger.warning(
-                f"[ImageGuard] {api_name} 流式请求失败，尝试回退到同步模式: {stream_exc}"
-            )
-            try:
-                return await self._call_single_api_sync(
-                    url=url,
-                    headers=headers,
-                    payload=payload_sync,
-                    timeout_seconds=timeout_seconds,
-                    api_name=api_name,
-                )
-            except Exception as sync_exc:
-                raise sync_exc from stream_exc
-
-    async def _call_single_api_stream(
-        self,
-        url: str,
-        headers: dict,
-        payload: dict,
-        timeout_seconds: float,
-        api_name: str,
-    ) -> str:
-        """执行 SSE 流式请求并拼接增量内容。"""
-        collected: list[str] = []
-        finish_reason: str | None = None
-        raw_chunks: list[dict] | None = [] if self.config.get("debug_log_llm_response", False) else None
-
-        async with self._http_client.stream(
-            "POST",
-            url,
-            json=payload,
-            headers=headers,
-            timeout=timeout_seconds,
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data:
-                    continue
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    logger.warning(f"[ImageGuard] {api_name} 流式解析跳过无效 JSON: {data[:200]}")
-                    continue
-
-                if raw_chunks is not None:
-                    raw_chunks.append(chunk)
-
-                if "error" in chunk:
-                    err = chunk["error"]
-                    err_msg = err.get("message") if isinstance(err, dict) else str(err)
-                    raise RuntimeError(f"{api_name} 流式返回错误: {err_msg}")
-
-                choices = chunk.get("choices")
-                if not choices:
-                    continue
-                choice = choices[0] if isinstance(choices, list) and choices else {}
-                if not isinstance(choice, dict):
-                    continue
-
-                if choice.get("finish_reason"):
-                    finish_reason = choice.get("finish_reason")
-
-                delta = choice.get("delta")
-                if delta is None:
-                    delta = choice.get("message", {})
-
-                if not isinstance(delta, dict):
-                    continue
-
-                content_piece = delta.get("content")
-                if content_piece is not None:
-                    if isinstance(content_piece, list):
-                        text = "".join(
-                            part.get("text", "") if isinstance(part, dict) else str(part)
-                            for part in content_piece
-                        )
-                        if text:
-                            collected.append(text)
-                    elif isinstance(content_piece, str):
-                        if content_piece:
-                            collected.append(content_piece)
-                    else:
-                        text = str(content_piece)
-                        if text:
-                            collected.append(text)
-
-        full_text = "".join(collected)
-
-        if self.config.get("debug_log_llm_response", False):
-            logger.info(
-                f"[ImageGuard] {api_name} 流式拼接结果: {full_text[:2000]}"
-                + (f" ...（截断，共 {len(full_text)} 字符）" if len(full_text) > 2000 else "")
-            )
-            if raw_chunks is not None:
-                logger.info(
-                    f"[ImageGuard] {api_name} 流式原始块数: {len(raw_chunks)} finish_reason={finish_reason}"
-                )
-
-        if not full_text or not full_text.strip():
-            raise ValueError(
-                f"{api_name} 流式返回内容为空，finish_reason={finish_reason or 'unknown'}"
-            )
-
-        return full_text
-
-    async def _call_single_api_sync(
-        self,
-        url: str,
-        headers: dict,
-        payload: dict,
-        timeout_seconds: float,
-        api_name: str,
-    ) -> str:
-        """同步回退路径（保留用于兼容不支持流式的服务端）。"""
         resp = await self._http_client.post(
-            url,
+            f"{base_url.rstrip('/')}/v1/chat/completions",
             json=payload,
-            headers=headers,
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout_seconds,
         )
         resp.raise_for_status()
@@ -575,31 +427,10 @@ class ImageGuard(Star):
         return str(content)
 
     async def _call_astrbot_provider(self, prompt: str, image_urls: list[str]) -> str:
-        """回退到 AstrBot 当前会话配置的 LLM Provider（优先流式）。
-
-        优先尝试 \u0060provider.text_chat_stream\u0060，若提供者未实现或流式过程中出错，
-        则回退到同步的 \u0060provider.text_chat\u0060，确保兼容所有 AstrBot 版本。
-        """
+        """回退到 AstrBot 当前会话配置的 LLM Provider。"""
         provider = self.context.get_using_provider()
         if not provider:
             raise ValueError("No provider available")
-
-        if hasattr(provider, "text_chat_stream"):
-            try:
-                return await self._call_astrbot_provider_stream(provider, prompt, image_urls)
-            except NotImplementedError as e:
-                logger.warning(f"[ImageGuard] AstrBot Provider 流式未实现，回退到同步: {e}")
-            except Exception as e:
-                logger.warning(f"[ImageGuard] AstrBot Provider 流式调用失败，尝试同步回退: {e}")
-                try:
-                    resp = await provider.text_chat(
-                        prompt=prompt,
-                        image_urls=image_urls,
-                        session_id=None,
-                    )
-                    return resp.completion_text
-                except Exception as sync_e:
-                    raise sync_e from e
 
         resp = await provider.text_chat(
             prompt=prompt,
@@ -607,59 +438,6 @@ class ImageGuard(Star):
             session_id=None,
         )
         return resp.completion_text
-
-    async def _call_astrbot_provider_stream(self, provider, prompt: str, image_urls: list[str]) -> str:
-        """通过 \u0060text_chat_stream\u0060 以流式方式获取完整响应文本。"""
-        collected_chunks: list[str] = []
-        final_text: str | None = None
-        received_any = False
-
-        async for llm_resp in provider.text_chat_stream(
-            prompt=prompt,
-            image_urls=image_urls,
-            session_id=None,
-        ):
-            received_any = True
-            text = getattr(llm_resp, "completion_text", None)
-            if not text and getattr(llm_resp, "result_chain", None) is not None:
-                try:
-                    text = llm_resp.result_chain.get_plain_text()
-                except Exception:
-                    text = None
-            if not text:
-                continue
-
-            is_chunk = bool(getattr(llm_resp, "is_chunk", False))
-
-            if is_chunk:
-                collected_chunks.append(text)
-                if self.config.get("debug_log_llm_response", False):
-                    logger.info(f"[ImageGuard] AstrBot Provider 流式增量: {text[:200]}")
-            else:
-                final_text = text
-                if self.config.get("debug_log_llm_response", False):
-                    logger.info(f"[ImageGuard] AstrBot Provider 流式最终: {text[:2000]}")
-
-        if final_text is not None and final_text.strip():
-            if self.config.get("debug_log_llm_response", False):
-                logger.info(
-                    f"[ImageGuard] AstrBot Provider 流式完成（采用最终包），长度={len(final_text)} "
-                    f"增量拼接长度={len(''.join(collected_chunks))}"
-                )
-            return final_text
-
-        full_via_chunks = "".join(collected_chunks)
-        if full_via_chunks and full_via_chunks.strip():
-            if self.config.get("debug_log_llm_response", False):
-                logger.info(
-                    f"[ImageGuard] AstrBot Provider 流式完成（增量拼接），长度={len(full_via_chunks)}"
-                )
-            return full_via_chunks
-
-        if not received_any:
-            raise ValueError("AstrBot Provider 流式未返回任何数据")
-        raise ValueError("AstrBot Provider 流式返回内容为空")
-
 
     # ── 判罚执行 ────────────────────────────────────────────────
 
