@@ -1,6 +1,6 @@
 # 🛡️ 图片内容审查卫士 (Image Guard Pro)
 
-> **版本**: v1.7.3
+> **版本**: v1.8.0
 > **作者**: YEZI
 
 这是一个专为 AstrBot 设计的高级视觉审核插件。它利用多模态大模型（如 Gemini 1.5/2.5 Pro, GPT-4o）的视觉理解能力，对群聊/私聊发送的图片进行**语义级审查**。
@@ -57,20 +57,57 @@
 
 ### 📝 详细配置项说明
 
+配置中心（插件页）与 `_conf_schema.json` 共用同一份配置，两处都可以改。
+
 | 配置项 | 说明 | 推荐值 |
 | :--- | :--- | :--- |
-| **llm_providers** | **(核心·新版)** 供应商列表，支持动态增删排序。每个条目可选模板：**OpenAI 兼容**（填写 api_key/base_url/model）或 **AstrBot 当前 Provider**（复用 AstrBot 配置）。旧版平铺配置 (llm_api_key 等) 首次启动时会自动迁移。 | 在 Dashboard 中配置 → 添加条目 → 选择模板 |
-| **sensitive_texts** | **文字识图**：图片里有这些字就封。 | `["加微信", "退款", "代充"]` |
-| **forbidden_descriptions** | **内容识图**：画面是这个东西就封。 | `["东亚地图", "裸露画面", "政治隐喻图"]` |
-| **custom_vision_prompt** | **自定义引导词**：教 AI 怎么看图。 | "请仔细分辨地图轮廓，非地图类图片一律放行。" |
-| **llm_max_tokens** | **输出上限**（全局默认值）：大模型单次审核输出的最大 token 数。本地 reasoning 模型容易先输出思考过程，建议调大避免截断最终结论。 | `512` |
-| **llm_timeout_seconds** | **请求超时**（全局默认值）：大模型接口请求超时时间。本地视觉模型首次处理图片可能较慢，建议 120 秒或更高。 | `120.0` |
-| **compressed_image_max_bytes** | **图片压缩上限**：发送给大模型审核前会把图片 data URL 压缩到该字节数以内，默认 1MB；GIF 会保留动画并按需减少颜色、尺寸或帧数。 | `1048576` |
-| **keep_compressed_image_in_temp** | **保留压缩图**：开启后会把压缩后的 JPEG 或 GIF 保存到 AstrBot 的 `data/temp/astrbot_plugin_image_guard` 子目录，并在日志中输出文件路径。 | `false` |
-| **debug_log_llm_response** | **调试日志**：是否将大模型返回的原始内容输出到日志。可能包含审核理由或图片相关敏感信息，默认关闭。 | `false` |
-| **group_scope** | 开启审查的群号。填 `["0"]` 代表所有群。 | `["0"]` |
-| **report_target_id** | 接收战报的管理员 QQ 号 (纯数字)。 | 你的QQ号 |
-| **group_report_targets** | **群聊上报映射**：按来源群指定违规战报接收目标，支持 `private` 私聊和 `group` 群聊。旧格式 `["群号:接收人QQ"]` 仍按私聊处理。 | `["908799265:private:123456789", "123456789:group:987654321"]` |
+| **llm_providers** | **(核心)** 供应商列表，按顺序依次尝试，第一个返回结果的即本次审核结论。模板：**OpenAI 兼容** / **ModelScope** / **AstrBot 当前 Provider**。配置中心支持新增、编辑、排序、删除与**一键连通性测试**；页面读到的 API Key 是掩码，回传掩码即表示不修改。 | 配置中心 → LLM 供应商 |
+| **reasoning_effort** | 透传给模型的推理强度，留空则不发送该参数。 | `medium` 或留空 |
+| **custom_vision_prompt** | **自定义引导词**：教模型重点看哪些细节，会拼接到系统提示词。 | "请仔细分辨地图轮廓，非地图类图片一律放行。" |
+| **sensitive_texts** | **文字识图（OCR）**：图片里出现这些文字即违规。 | `["加微信", "退款", "代充"]` |
+| **forbidden_descriptions** | **内容识图（语义）**：画面符合这些描述即违规。 | `["东亚地图", "裸露画面"]` |
+| **llm_max_tokens** | 单次审核输出的最大 token 数，本地 reasoning 模型容易先输出思考过程，建议调大避免结论被截断。 | `512` |
+| **llm_timeout_seconds** | 接口请求超时（秒）。本地视觉模型首次处理图片较慢，建议 120 秒或更高。 | `120.0` |
+| **compressed_image_max_bytes** | 送审前把图片 data URL 压缩到该字节数以内；GIF 会保留动画并按需减少颜色、尺寸或帧数。 | `1048576` |
+| **group_scope** / **private_scope** | 启用审查的群号 / 私聊用户，填 `0` 表示全部。 | `["0"]` / `[]` |
+| **check_probability** | 抽查概率（0.0-1.0），1.0 为每图必查。 | `1.0` |
+| **enable_recall** | 是否撤回群聊中的违规图片消息（需要 Bot 具备管理员权限）。 | `true` |
+| **ban_duration** | 违规禁言时长（秒），`0` 表示不禁言。 | `86400` |
+| **report_target_id** | 违规战报默认接收人（管理员 QQ 号），留空则不转发。 | 你的 QQ 号 |
+| **group_report_targets** | **群上报映射**：为指定来源群单独指定战报接收目标，支持 `private` 私聊与 `group` 群聊；未命中时回退到 `report_target_id`。配置中心可在表格里直接增删。 | `908799265 → private:123456789` |
+| **audit_history_max_records** | 审核历史最大保留条数，超出后删除最早记录，`0` 表示不保留。 | `500` |
+| **audit_cache_enabled** | 启用审核缓存：同一张图片累计审核达到阈值后直接跳过。 | `true` |
+| **audit_cache_threshold** | 跳过阈值（次）。`1` 表示同一图片只审一次，`0` 会被自动调整为 `1`。 | `3` |
+| **audit_cache_max_entries** | 缓存条目上限，超出后淘汰计数最低的条目，`0` 表示不限制（不推荐）。 | `10000` |
+| **keep_compressed_image_in_temp** | 调试开关：把压缩后的图片保存到 `data/temp/astrbot_plugin_image_guard` 并在日志中输出路径。 | `false` |
+| **debug_log_llm_response** | 调试开关：把模型原始响应写入日志，可能包含判定理由或图片相关敏感信息。 | `false` |
+
+---
+
+## 🖥️ 审核控制台（插件页）
+
+插件在 AstrBot WebUI 中提供一个独立的页面（`pages/audit-history`），无需进入插件配置页即可完成日常运维：
+
+* **审核概览**：KPI 带（违规总数 / 处置成功率 / 缓存跳过 / LLM 调用）、14 天违规趋势图（可切 7 / 14 / 30 天）、供应商命中占比、运行配置快照。
+* **审核记录**：卡片流展示证据缩略图、判定理由、内容标签与处置状态；支持关键词搜索、标签筛选、处置状态筛选、时间排序、分页与 CSV 导出。
+* **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
+* **配置中心**：五个分组标签页（审查规则 / LLM 供应商 / 范围与处置 / 图片与调试 / 缓存与存储）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
+* **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
+* **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
+
+页面通过 `window.AstrBotPluginPage` bridge 调用下列插件 API：
+
+| 方法 | 路由 | 说明 |
+| :--- | :--- | :--- |
+| GET | `audit/list` | 审核记录（最多 1000 条）、供应商统计、缓存统计、配置摘要 |
+| POST | `audit/delete` | 删除单条记录 |
+| POST | `audit/clear` | 清空审核历史 |
+| GET | `audit/config` | 读取插件配置（API Key 已掩码） |
+| POST | `audit/config/update` | 按白名单合并配置并热重载 |
+| POST | `audit/providers/save` | 整体保存供应商列表并热重载 |
+| POST | `audit/providers/test` | 供应商连通性测试 |
+| POST | `audit/cache/clear` | 清空审核缓存指纹 |
+| POST | `audit/storage/prune` | 清理孤立图片 |
 
 ---
 

@@ -1,6 +1,7 @@
 name: astrbot_plugin_image_guard
-version: 1.7.3
-desc: 基于多模态 LLM 的图片内容审查卫士。v1.7.3 修复审核图片一次性文件 token 在快速切页时失效的问题。
+version: 1.8.0
+display_name: 图片内容审查卫士
+desc: 基于多模态 LLM 的图片内容审查卫士。v1.8.0 重做插件页：全新的顶栏导航与卡片式审核控制台，支持供应商增删改与连通性测试、配置白名单更新、缓存与孤立图片清理。
 author: YEZI
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
 # Python 依赖：pillow (PIL)、httpx

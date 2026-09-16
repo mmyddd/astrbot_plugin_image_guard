@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "图片内容审查卫士"
+  },
+  "pages": {
+    "audit-history": {
+      "title": "ImageGuard 审核控制台",
+      "desc": "查看违规审核记录、处置结果与运行配置。"
+    }
+  }
+}

@@ -1,8 +1,9 @@
-import httpx
-import re
-import random
-import json
+import asyncio
 import base64
+import httpx
+import json
+import random
+import re
 from datetime import datetime
 from pathlib import Path
 from .cache import ImageAuditCache
@@ -25,6 +26,118 @@ _REASON_RE = re.compile(r"REASON:\s*(.+)", re.IGNORECASE)
 _TAGS_RE = re.compile(r"^\s*TAGS:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
 _MAX_AUDIT_TAGS = 8
 _MAX_AUDIT_TAG_LENGTH = 24
+
+# ── 插件页 API 元数据 ──
+PAGE_LIST_LIMIT = 1000
+"""审核历史 API 单次最多返回的记录条数，避免大历史拖垮页面。"""
+CONNECTIVITY_TEST_TIMEOUT = 20.0
+"""供应商连通性测试的超时时间（秒）。"""
+SUPPORTED_PROVIDER_TEMPLATES = ("openai_compatible", "modelscope", "astrbot_provider")
+"""新版供应商条目支持的模板 key。"""
+SECRET_MASK = "********"
+"""配置接口中敏感字段的掩码值，避免 API Key 明文回传页面。"""
+SECRET_FIELDS = ("api_key",)
+"""llm_providers 条目中需要掩码的字段。"""
+
+_EDITABLE_LIST_FIELDS = ("group_scope", "private_scope", "sensitive_texts", "forbidden_descriptions")
+_EDITABLE_TEXT_FIELDS = ("custom_vision_prompt", "reasoning_effort", "report_target_id")
+_EDITABLE_DICT_LIST_FIELDS = ("group_report_targets",)
+_EDITABLE_BOOL_FIELDS = ("enable_recall", "audit_cache_enabled", "keep_compressed_image_in_temp", "debug_log_llm_response")
+_EDITABLE_INT_FIELDS = (
+    "llm_max_tokens",
+    "compressed_image_max_bytes",
+    "ban_duration",
+    "audit_history_max_records",
+    "audit_cache_threshold",
+    "audit_cache_max_entries",
+)
+_EDITABLE_FLOAT_FIELDS = ("llm_timeout_seconds", "check_probability")
+
+
+def _as_list(raw: object) -> list:
+    if isinstance(raw, list):
+        return list(raw)
+    if isinstance(raw, str):
+        return [raw] if raw else []
+    return []
+
+
+def _as_text_list(raw: object) -> list[str]:
+    return [str(item).strip() for item in _as_list(raw) if str(item).strip()]
+
+
+def _as_int(raw: object, default: int) -> int:
+    try:
+        return int(float(raw))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(raw: object, default: float) -> float:
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool(raw: object) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
+
+
+def _sanitize_providers(raw: object, keep_index: bool = False) -> list[dict]:
+    """把任意来源的供应商列表规整成持久化结构，非法模板退回 OpenAI 兼容。
+
+    ``keep_index`` 为 True 时保留页面回传的 ``__index`` 提示（用于把掩码 Key
+    还原成已保存的明文）；该字段只是临时提示，写回配置前会被清掉。"""
+    providers: list[dict] = []
+    for item in _as_list(raw):
+        if not isinstance(item, dict):
+            continue
+        template = str(item.get("__template_key") or "").strip()
+        if template not in SUPPORTED_PROVIDER_TEMPLATES:
+            template = "openai_compatible"
+        entry = {
+            "__template_key": template,
+            "name": str(item.get("name") or "").strip(),
+        }
+        if keep_index:
+            index_hint = _as_int(item.get("__index", -1), -1)
+            if index_hint >= 0:
+                entry["__index"] = index_hint
+        if template != "astrbot_provider":
+            entry["api_key"] = str(item.get("api_key") or "").strip()
+            entry["base_url"] = str(item.get("base_url") or "").strip()
+            entry["model"] = str(item.get("model") or "").strip()
+        if not entry["name"]:
+            entry["name"] = "AstrBot Provider" if template == "astrbot_provider" else "OpenAI API"
+        providers.append(entry)
+    return providers
+
+
+def _mask_secret(value: object) -> str:
+    """保留首尾字符的掩码，便于用户确认填的是哪一把 Key。"""
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 10:
+        return SECRET_MASK
+    return f"{text[:4]}{SECRET_MASK}{text[-4:]}"
+
+
+def _mask_providers(providers: list[dict]) -> list[dict]:
+    masked: list[dict] = []
+    for entry in providers:
+        item = dict(entry)
+        for field in SECRET_FIELDS:
+            if item.get(field):
+                item[field] = _mask_secret(item[field])
+                item[f"{field}_masked"] = True
+        masked.append(item)
+    return masked
 
 
 def _normalize_audit_tags(raw_tags: object) -> list[str]:
@@ -70,7 +183,7 @@ def _parse_audit_tags(response_text: str) -> list[str]:
     return _normalize_audit_tags(parsed)
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.7.3")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.8.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -116,6 +229,30 @@ class ImageGuard(Star):
             self._api_audit_config_update,
             ["POST"],
             "更新插件配置并重载",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/cache/clear",
+            self._api_audit_cache_clear,
+            ["POST", "DELETE"],
+            "清空审核缓存指纹",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/providers/test",
+            self._api_audit_provider_test,
+            ["POST"],
+            "测试 LLM 供应商连通性",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/providers/save",
+            self._api_audit_providers_save,
+            ["POST"],
+            "保存 LLM 供应商列表并重载",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/storage/prune",
+            self._api_audit_storage_prune,
+            ["POST", "DELETE"],
+            "清理没有对应记录的本地图片",
         )
 
     # ── 审核缓存持久化 ─────────────────────────────────────────
@@ -363,11 +500,18 @@ class ImageGuard(Star):
             ) from last_exception
         raise RuntimeError("没有可用的供应商配置")
 
-    async def _call_single_api(self, prompt: str, image_urls: list[str], provider: dict) -> str | None:
+    async def _call_single_api(
+        self,
+        prompt: str,
+        image_urls: list[str],
+        provider: dict,
+        timeout_seconds: float | None = None,
+    ) -> str | None:
         """调用单个 OpenAI 兼容 API 进行审核。
 
         Args:
             provider: 供应商配置字典，包含 api_key / base_url / model / name 等字段。
+            timeout_seconds: 覆盖全局超时（连通性测试等短请求使用）。
         """
         api_key = provider.get("api_key", "")
         base_url = provider.get("base_url", "")
@@ -391,7 +535,8 @@ class ImageGuard(Star):
                 "image_url": {"url": url}
             })
 
-        timeout_seconds = float(self.config.get("llm_timeout_seconds", 120))
+        if timeout_seconds is None:
+            timeout_seconds = float(self.config.get("llm_timeout_seconds", 120))
         payload = {
             "model": model_name or "gpt-4o",
             "messages": messages,
@@ -696,6 +841,8 @@ class ImageGuard(Star):
         for record in records:
             if isinstance(record, dict):
                 record["tags"] = _normalize_audit_tags(record.get("tags"))
+        total_records = len(records)
+        records = records[-PAGE_LIST_LIMIT:]
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
@@ -742,6 +889,11 @@ class ImageGuard(Star):
                 "audit_records": len(records_json),
                 "cache_data": cache_data_size,
             },
+            "audit_config": self._audit_config_summary(),
+            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_records": total_records,
+            "record_limit": PAGE_LIST_LIMIT,
+            "truncated": total_records > len(records),
         }
 
     async def _api_audit_clear(self):
@@ -761,47 +913,268 @@ class ImageGuard(Star):
         await self.put_kv_data("audit_history", records)
         return {"message": "ok"}
 
-    async def _api_audit_config_get(self) -> dict:
-        """返回当前插件配置（排除 KV 类数据）"""
+    def _audit_config_summary(self) -> dict:
+        """页面头部用的配置摘要，不含任何敏感字段。"""
+        providers = _sanitize_providers(self.config.get("llm_providers", []))
+        return {
+            "group_scope": _as_text_list(self.config.get("group_scope", ["0"])) or ["0"],
+            "private_scope": _as_text_list(self.config.get("private_scope", [])),
+            "rule_count": len(_as_text_list(self.config.get("sensitive_texts", [])))
+            + len(_as_text_list(self.config.get("forbidden_descriptions", []))),
+            "provider_count": len(providers),
+            "provider_names": [p.get("name", "") for p in providers][:5],
+            "check_probability": _as_float(self.config.get("check_probability", 1.0), 1.0),
+            "enable_recall": _as_bool(self.config.get("enable_recall", True)),
+            "ban_duration": _as_int(self.config.get("ban_duration", 86400), 86400),
+            "cache_enabled": _as_bool(self.config.get("audit_cache_enabled", True)),
+            "report_enabled": bool(str(self.config.get("report_target_id", "")).strip())
+            or bool(_as_list(self.config.get("group_report_targets", []))),
+        }
+
+    def _plugin_config_object(self):
+        """拿到 AstrBot 持有的 AstrBotConfig（非副本），拿不到时退回实例配置。"""
         from astrbot.core.star.star import star_registry
+
         for plugin_md in star_registry:
             if plugin_md.name == "astrbot_plugin_image_guard":
                 if plugin_md.config:
-                    return dict(plugin_md.config)
+                    return plugin_md.config
                 break
-        return dict(self.config)
+        return self.config
+
+    async def _save_and_reload_plugin(self) -> bool:
+        """持久化配置并尝试热重载插件，返回是否重载成功。"""
+        config_obj = self._plugin_config_object()
+        try:
+            config_obj.save_config()
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 配置保存失败: {e}")
+            return False
+
+        try:
+            if hasattr(self.context, "reload_plugin"):
+                await self.context.reload_plugin("astrbot_plugin_image_guard")
+                return True
+            if hasattr(self.context, "_star_manager"):
+                await self.context._star_manager.reload("astrbot_plugin_image_guard")
+                return True
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 插件重载失败: {e}")
+            return False
+
+        logger.warning("[ImageGuard] 找不到 reload 方法，配置已保存但需手动重载插件")
+        return False
+
+    async def _api_audit_config_get(self) -> dict:
+        """返回当前插件配置（API Key 已掩码，页面不需要明文）。"""
+        config_obj = self._plugin_config_object()
+        try:
+            raw = dict(config_obj)
+        except Exception:
+            raw = dict(self.config)
+        raw["llm_providers"] = _mask_providers(_sanitize_providers(raw.get("llm_providers", [])))
+        return raw
 
     async def _api_audit_config_update(self):
-        """更新插件配置并重载插件"""
+        """按白名单合并配置：页面没提交的字段（如供应商列表）保持原值。"""
         from quart import request
-        from astrbot.core.star.star import star_registry
 
-        new_config = await request.get_json()
-        if not new_config:
+        payload = await request.get_json(silent=True) or {}
+        if not isinstance(payload, dict) or not payload:
             return {"message": "empty config"}, 400
 
-        for plugin_md in star_registry:
-            if plugin_md.name == "astrbot_plugin_image_guard":
-                if plugin_md.config:
-                    plugin_md.config.save_config(new_config)
-                    # 重载插件使新配置生效
-                    try:
-                        reloaded = False
-                        # 优先使用公开 API
-                        if hasattr(self.context, "reload_plugin"):
-                            await self.context.reload_plugin("astrbot_plugin_image_guard")
-                            reloaded = True
-                        elif hasattr(self.context, "_star_manager"):
-                            await self.context._star_manager.reload("astrbot_plugin_image_guard")
-                            reloaded = True
-                        if not reloaded:
-                            logger.warning("[ImageGuard] 找不到 reload 方法，配置已保存但需手动重载插件")
-                    except Exception as e:
-                        logger.warning(f"[ImageGuard] 插件重载失败: {e}")
-                    return {"message": "ok"}
-                break
+        config_obj = self._plugin_config_object()
+        updated: list[str] = []
 
-        return {"message": "plugin config not found"}, 404
+        for field in _EDITABLE_LIST_FIELDS:
+            if field in payload:
+                config_obj[field] = _as_text_list(payload[field])
+                updated.append(field)
+
+        for field in _EDITABLE_TEXT_FIELDS:
+            if field in payload:
+                config_obj[field] = str(payload[field] or "").strip()
+                updated.append(field)
+
+        for field in _EDITABLE_DICT_LIST_FIELDS:
+            if field in payload:
+                entries = [item for item in _as_list(payload[field]) if isinstance(item, dict)]
+                config_obj[field] = entries
+                updated.append(field)
+
+        for field in _EDITABLE_BOOL_FIELDS:
+            if field in payload:
+                config_obj[field] = _as_bool(payload[field])
+                updated.append(field)
+
+        for field in _EDITABLE_INT_FIELDS:
+            if field in payload:
+                config_obj[field] = _as_int(payload[field], _as_int(self.config.get(field, 0), 0))
+                updated.append(field)
+
+        for field in _EDITABLE_FLOAT_FIELDS:
+            if field in payload:
+                config_obj[field] = _as_float(payload[field], _as_float(self.config.get(field, 0), 0))
+                updated.append(field)
+
+        if not updated:
+            return {"message": "no editable field in payload"}, 400
+
+        reloaded = await self._save_and_reload_plugin()
+        return {
+            "message": "ok",
+            "updated": updated,
+            "reloaded": reloaded,
+            "config": self._audit_config_summary(),
+        }
+
+    async def _api_audit_cache_clear(self):
+        """清空审核缓存指纹（计数从零开始）。"""
+        await self._ensure_audit_cache_loaded()
+        removed = self._audit_cache.clear()
+        await self._save_audit_cache()
+        return {"message": "ok", "removed": removed}
+
+    async def _api_audit_provider_test(self):
+        """按供应商条目做一次最小请求，验证地址、Key 与模型是否可用。"""
+        from quart import request
+
+        payload = await request.get_json(silent=True) or {}
+        provider = payload.get("provider") if isinstance(payload, dict) else None
+        if not isinstance(provider, dict):
+            return {"message": "missing provider"}, 400
+
+        entries = _sanitize_providers([provider])
+        if not entries:
+            return {"message": "invalid provider"}, 400
+        entry = entries[0]
+        template = entry.get("__template_key", "")
+        name = entry.get("name", "Unknown")
+
+        if template == "astrbot_provider":
+            try:
+                result = await asyncio.wait_for(
+                    self._call_astrbot_provider(
+                        "连通性测试：请只回复 OK 两个字母。", []
+                    ),
+                    timeout=CONNECTIVITY_TEST_TIMEOUT,
+                )
+                return {
+                    "ok": True,
+                    "provider": name,
+                    "message": f"AstrBot Provider 可用，返回：{str(result).strip()[:60]}",
+                }
+            except Exception as e:
+                return {"ok": False, "provider": name, "message": f"调用失败：{e}"}
+
+        # 掩码值意味着用户没有改动 Key，回退到磁盘上已保存的那一把
+        api_key = str(entry.get("api_key") or "")
+        if SECRET_MASK in api_key:
+            saved = self._find_saved_provider(name)
+            api_key = str(saved.get("api_key") or "") if saved else ""
+
+        if not api_key or not entry.get("base_url"):
+            return {"ok": False, "provider": name, "message": "缺少 API Key 或 API 地址"}
+
+        probe = dict(entry)
+        probe["api_key"] = api_key
+        timeout_seconds = min(
+            max(_as_float(self.config.get("llm_timeout_seconds", 120), 120), 5.0),
+            CONNECTIVITY_TEST_TIMEOUT,
+        )
+        try:
+            result = await self._call_single_api(
+                "连通性测试：请只回复 OK 两个字母。", [], probe, timeout_seconds
+            )
+            return {
+                "ok": True,
+                "provider": name,
+                "message": f"接口可用，返回：{str(result).strip()[:60]}",
+            }
+        except Exception as e:
+            return {"ok": False, "provider": name, "message": f"调用失败：{e}"}
+
+    def _find_saved_provider(self, name: str) -> dict | None:
+        """按名称回查磁盘上已保存的供应商（用于掩码 Key 的回填）。"""
+        for entry in _sanitize_providers(self.config.get("llm_providers", [])):
+            if entry.get("name") == name:
+                return entry
+        return None
+
+    async def _api_audit_providers_save(self):
+        """整体替换供应商列表（页面弹窗里增删改排序后的结果）。"""
+        from quart import request
+
+        payload = await request.get_json(silent=True) or {}
+        raw_providers = payload.get("providers") if isinstance(payload, dict) else None
+        if not isinstance(raw_providers, list):
+            return {"message": "providers must be a list"}, 400
+
+        providers = _sanitize_providers(raw_providers, keep_index=True)
+        saved_list = _sanitize_providers(self.config.get("llm_providers", []))
+        for index, entry in enumerate(providers):
+            for field in SECRET_FIELDS:
+                value = str(entry.get(field) or "")
+                if SECRET_MASK not in value:
+                    continue
+                # 页面回传的是掩码，说明这项没改：沿用已保存的明文
+                saved = self._find_saved_provider(entry.get("name", ""))
+                origin = _as_int(entry.get("__index", index), index)
+                if not saved and 0 <= origin < len(saved_list):
+                    candidate = saved_list[origin]
+                    if candidate.get("__template_key") == entry.get("__template_key"):
+                        saved = candidate
+                if not saved and 0 <= origin < len(saved_list):
+                    saved = saved_list[origin]
+                entry[field] = str(saved.get(field) or "") if saved else ""
+
+        for entry in providers:
+            entry.pop("__index", None)
+
+        config_obj = self._plugin_config_object()
+        config_obj["llm_providers"] = providers
+        reloaded = await self._save_and_reload_plugin()
+        return {
+            "message": "ok",
+            "count": len(providers),
+            "reloaded": reloaded,
+            "providers": _mask_providers(providers),
+            "config": self._audit_config_summary(),
+        }
+
+    async def _api_audit_storage_prune(self):
+        """删除本地已不存在记录的审核图片，释放磁盘空间。"""
+        try:
+            records = await self.get_kv_data("audit_history", [])
+            if not isinstance(records, list):
+                records = []
+            known = {
+                str(Path(r.get("local_image")).resolve())
+                for r in records
+                if isinstance(r, dict) and r.get("local_image")
+            }
+
+            if not AUDIT_IMAGE_DIR.exists():
+                return {"message": "ok", "removed": 0, "freed_bytes": 0}
+
+            removed = 0
+            freed = 0
+            for path in AUDIT_IMAGE_DIR.iterdir():
+                if not path.is_file():
+                    continue
+                if str(path.resolve()) in known:
+                    continue
+                try:
+                    size = path.stat().st_size
+                    path.unlink()
+                    removed += 1
+                    freed += size
+                except OSError as e:
+                    logger.warning(f"[ImageGuard] 清理图片失败 {path}: {e}")
+            return {"message": "ok", "removed": removed, "freed_bytes": freed}
+        except Exception as e:
+            logger.error(f"[ImageGuard] 清理本地图片失败: {e}")
+            return {"message": f"prune failed: {e}"}, 500
 
     # ── 生命周期 ────────────────────────────────────────────────
 

@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "Image Guard"
+  },
+  "pages": {
+    "audit-history": {
+      "title": "ImageGuard Console",
+      "desc": "Review violation records, enforcement results and runtime configuration."
+    }
+  }
+}
