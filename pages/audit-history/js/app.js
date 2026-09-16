@@ -199,6 +199,8 @@
       state.providerStats = response.provider_stats || {};
       state.cacheStats = response.cache_stats || {};
       state.storageSize = response.storage_size || {};
+      state.runtimeStats = response.runtime_stats || {};
+      if (Array.isArray(response.pending)) state.pending = response.pending;
       state.auditConfig = response.audit_config || {};
       state.totalRecords = Number(response.total_records || state.records.length);
       state.truncated = Boolean(response.truncated);
@@ -219,6 +221,55 @@
       loaded = true;
       setBusy(false);
     }
+  }
+
+  /* ── 处理中任务轮询 ───────────────────────────────────── */
+  let pendingTimer = 0;
+  let pendingTicking = 0;
+
+  // 卡片上的"已用时"需要本地走动，否则两次轮询之间是静止的
+  function startPendingTicker() {
+    if (pendingTicking) return;
+    pendingTicking = window.setInterval(() => {
+      if (!state.pending.length) return;
+      if (document.hidden) return;
+      const items = state.pending.map(item => Object.assign({}, item, {
+        elapsed_seconds: (Number(item.elapsed_seconds) || 0) + 1
+      }));
+      state.pending = items;
+      IG.views.renderPending();
+    }, 1000);
+  }
+
+  function hasActivePending() {
+    return Boolean(state.pending && state.pending.length);
+  }
+
+  function schedulePendingPoll() {
+    if (pendingTimer) return;
+    pendingTimer = window.setTimeout(async () => {
+      pendingTimer = 0;
+      if (!IG.bridge.isEmbedded() || document.hidden) {
+        schedulePendingPoll();
+        return;
+      }
+      const before = state.pending.length;
+      try {
+        const response = await IG.api.pending() || {};
+        state.pending = Array.isArray(response.pending) ? response.pending : [];
+        IG.views.renderPending();
+        // 任务结束后补拉一次完整数据，让新记录立刻出现在列表里
+        if (before > 0 && !state.pending.length) await reloadRecords();
+      } catch (error) {
+        // 轮询失败不打扰用户，等下一次
+      }
+      schedulePendingPoll();
+    }, hasActivePending() ? 1500 : 4000);
+  }
+
+  function stopPendingPoll() {
+    if (pendingTimer) window.clearTimeout(pendingTimer);
+    pendingTimer = 0;
   }
 
   async function deleteRecord(id) {
@@ -366,6 +417,23 @@
     $('#rec-export').addEventListener('click', exportRecords);
     $('#rec-clear').addEventListener('click', clearRecords);
 
+    const pendingToggle = $('#pending-toggle');
+    if (pendingToggle) {
+      pendingToggle.addEventListener('click', () => {
+        state.pendingCollapsed = !state.pendingCollapsed;
+        IG.views.renderPending();
+      });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && IG.bridge.isEmbedded()) {
+        IG.api.pending().then(response => {
+          state.pending = Array.isArray(response && response.pending) ? response.pending : [];
+          IG.views.renderPending();
+        }).catch(() => {});
+      }
+    });
+
     $('#drawer-close').addEventListener('click', IG.views.closeDrawer);
     $('#drawer-scrim').addEventListener('click', IG.views.closeDrawer);
     $('#lightbox-close').addEventListener('click', IG.lightbox.close);
@@ -390,6 +458,7 @@
 
     window.addEventListener('hashchange', handleHashChange);
     window.addEventListener('beforeunload', event => {
+      stopPendingPoll();
       if (!IG.settings.isDirty()) return;
       event.preventDefault();
       event.returnValue = '';
@@ -417,6 +486,8 @@
       return reloadRecords();
     }).then(() => {
       openRecordFromHash();
+      startPendingTicker();
+      schedulePendingPoll();
     });
   }
 
@@ -425,7 +496,7 @@
     IG.settings.init();
     bindGlobal();
     const version = $('#brand-version');
-    if (version) version.textContent = 'v1.8.0';
+    if (version) version.textContent = 'v1.9.0';
 
     IG.views.fillList($('#recent-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');
     IG.views.fillList($('#records-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');

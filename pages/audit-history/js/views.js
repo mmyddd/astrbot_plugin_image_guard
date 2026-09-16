@@ -13,6 +13,8 @@
   const state = IG.state;
   const derive = IG.derive;
 
+  const PROVIDER_TOP_N = 8;
+
   const ICON_IMAGE = '<svg class="thumb-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M4.5 17l4.6-4.2 3.2 2.8 3.1-3 4.1 4"></path></svg>';
 
   /* ── 状态占位 ─────────────────────────────────────────── */
@@ -31,6 +33,60 @@
     host.innerHTML = stateMarkup(kind, title, message);
     const retry = host.querySelector('[data-retry]');
     if (retry) retry.addEventListener('click', () => IG.app.reloadRecords());
+  }
+
+  /* ── 处理中任务 ───────────────────────────────────────── */
+  function renderPending() {
+    const strip = $('#pending-strip');
+    const list = $('#pending-list');
+    if (!strip || !list) return;
+    const items = derive.pendingItems();
+    const count = items.reduce((sum, item) => sum + (Number(item.image_count) || 1), 0);
+
+    if (!items.length) {
+      if (!strip.hasAttribute('hidden')) {
+        strip.setAttribute('hidden', '');
+        list.innerHTML = '';
+      }
+      state.pendingSince = 0;
+      return;
+    }
+
+    strip.removeAttribute('hidden');
+    strip.dataset.collapsed = state.pendingCollapsed ? '1' : '0';
+    const toggle = $('#pending-toggle');
+    if (toggle) {
+      toggle.textContent = state.pendingCollapsed ? '展开' : '收起';
+      toggle.setAttribute('aria-expanded', state.pendingCollapsed ? 'false' : 'true');
+    }
+    const title = $('#pending-count');
+    if (title) {
+      title.textContent = format.int(items.length) + ' 个任务 · ' + format.int(count) + ' 张图片正在审核';
+    }
+
+    if (state.pendingCollapsed) {
+      list.innerHTML = '';
+      return;
+    }
+
+    list.innerHTML = items.map(item => {
+      const who = item.user_name || item.user_id || '未知用户';
+      const source = item.group_id ? '群 ' + item.group_id : '私聊';
+      const thumb = item.preview
+        ? '<span class="pending-thumb"><img alt="待审图片预览" src="' + esc(item.preview) + '"></span>'
+        : '<span class="pending-thumb"><span class="pending-thumb-empty"></span></span>';
+      return '<article class="pending-card" data-pending="' + esc(item.id || '') + '">' +
+        thumb +
+        '<div class="pending-main">' +
+        '<strong>' + esc(who) + ' · ' + esc(source) + '</strong>' +
+        '<div class="pending-meta"><span>' + format.int(item.image_count || 1) + ' 张图片</span>' +
+        '<span>已用时 ' + esc(format.elapsed(item.elapsed_seconds)) + '</span>' +
+        '<span>开始于 ' + esc(format.time(new Date(Date.now() - (Number(item.elapsed_seconds) || 0) * 1000))) + '</span></div>' +
+        '</div>' +
+        '<span class="pending-badge">审核中</span>' +
+        '</article>';
+    }).join('');
+    state.pendingSince = Date.now();
   }
 
   /* ── KPI ──────────────────────────────────────────────── */
@@ -98,6 +154,33 @@
       setBar('stat-calls-bar', 0);
     }
 
+    // ── 审核漏斗：送审了多少、跳过了多少、多少被判安全丢弃 ──
+    const funnel = derive.auditFunnel();
+    if (funnel.hasData) {
+      setText('stat-audited', format.int(funnel.audited));
+      setText('stat-audited-foot',
+        '送审 ' + format.int(funnel.auditTotal) +
+        ' · 跳过 ' + format.int(funnel.skipped) +
+        (funnel.noRules ? ' · 无规则 ' + format.int(funnel.noRules) : ''));
+      const skipRate = funnel.audited > 0 ? Math.round(funnel.skipped / funnel.audited * 100) : 0;
+      setBar('stat-audited-bar', skipRate);
+      setText('stat-safe', format.int(funnel.safe));
+      setText('stat-safe-foot', funnel.auditTotal > 0
+        ? '占送审 ' + format.percent(funnel.safe / funnel.auditTotal * 100) + ' · 未写入历史'
+        : '未写入历史记录');
+      setBar('stat-safe-bar', funnel.auditTotal > 0
+        ? Math.round(funnel.safe / funnel.auditTotal * 100) : 0);
+    } else {
+      setText('stat-audited', format.int(funnel.audited));
+      setText('stat-audited-foot', '尚无审核统计');
+      setBar('stat-audited-bar', 0);
+      setText('stat-safe', format.int(funnel.safe));
+      setText('stat-safe-foot', '未写入历史记录');
+      setBar('stat-safe-bar', 0);
+    }
+
+    renderPending();
+
     const navCount = $('#nav-record-count');
     if (navCount) navCount.textContent = state.totalRecords ? format.int(state.totalRecords) : '0';
   }
@@ -131,8 +214,10 @@
   /* ── 供应商统计 ───────────────────────────────────────── */
   function renderProviderStats() {
     const container = $('#provider-stats');
+    const more = $('#provider-more');
     if (!container) return;
-    const data = derive.providerEntries();
+    if (more) more.setAttribute('hidden', '');
+    const data = derive.providerEntries(PROVIDER_TOP_N);
     if (!data.entries.length) {
       container.innerHTML = '<div class="state state-inline">' +
         '<span class="state-mark" aria-hidden="true">∅</span>' +
@@ -148,6 +233,12 @@
         '<div class="provider-sub"><span class="provider-track"><i class="provider-fill" style="width:' + percent + '%"></i></span>' +
         '<span class="provider-pct">' + percent + '%</span></div></div>';
     }).join('');
+
+    if (more && data.truncated) {
+      more.textContent = '另有 ' + format.int(data.hiddenCount) + ' 个供应商未显示，占比按全部 ' +
+        format.int(data.allTotal) + ' 个供应商的 ' + format.int(data.total) + ' 次调用计算';
+      more.removeAttribute('hidden');
+    }
   }
 
   /* ── 配置快照 / 运行状态 / 顶栏标签 ───────────────────── */
@@ -591,6 +682,7 @@
     renderOverview: renderOverview,
     renderRecords: renderRecords,
     renderStats: renderStats,
+    renderPending: renderPending,
     renderTrend: renderTrend,
     renderTrendRange: renderTrendRange,
     renderSnapshot: renderSnapshot,

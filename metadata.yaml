@@ -1,7 +1,7 @@
 name: astrbot_plugin_image_guard
-version: 1.8.0
+version: 1.9.0
 display_name: 图片内容审查卫士
-desc: 基于多模态 LLM 的图片内容审查卫士。v1.8.0 重做插件页：全新的顶栏导航与卡片式审核控制台，支持供应商增删改与连通性测试、配置白名单更新、缓存与孤立图片清理。
+desc: 基于多模态 LLM 的图片内容审查卫士。v1.9.0 新增审核中的实时状态：WebUI 可看到正在处理的图片，只有命中违规才写入记录，判定安全直接丢弃。
 author: YEZI
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
 # Python 依赖：pillow (PIL)、httpx

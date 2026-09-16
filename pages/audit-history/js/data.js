@@ -48,6 +48,13 @@
       if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
       return (n / 1073741824).toFixed(2) + ' GB';
     },
+    elapsed(seconds) {
+      const n = Number(seconds);
+      if (!Number.isFinite(n) || n < 0) return '0.0 秒';
+      if (n < 60) return n.toFixed(1) + ' 秒';
+      const minutes = Math.floor(n / 60);
+      return minutes + ' 分 ' + Math.round(n % 60) + ' 秒';
+    },
     duration(seconds) {
       const n = Number(seconds);
       if (!Number.isFinite(n) || n <= 0) return '不禁言';
@@ -136,6 +143,10 @@
     providerStatus: {},
     providerDraft: null,
     providerEditIndex: -1,
+    pending: [],
+    runtimeStats: {},
+    pendingCollapsed: false,
+    pendingSince: 0,
     lastSyncAt: null,
     bridgeContext: null
   };
@@ -194,6 +205,9 @@
     },
     list() {
       return api.get('audit/list');
+    },
+    pending() {
+      return api.get('audit/pending');
     },
     clearRecords() {
       return api.post('audit/clear', {});
@@ -257,14 +271,49 @@
         value: buckets.get(item.key) || 0
       }));
     },
-    providerEntries() {
-      const entries = Object.keys(state.providerStats || {}).map(name => ({
+    // 命中分布默认只展示前 8 名，但占比始终按全部供应商的累计调用量计算，
+    // 否则列表被截断后百分比之和不等于 100%。
+    providerEntries(limit) {
+      const all = Object.keys(state.providerStats || {}).map(name => ({
         name: name,
         count: Number(state.providerStats[name]) || 0
       }));
-      entries.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
-      const total = entries.reduce((sum, item) => sum + item.count, 0);
-      return { entries: entries, total: total };
+      all.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
+      const total = all.reduce((sum, item) => sum + item.count, 0);
+      const top = typeof limit === 'number' && limit > 0 ? all.slice(0, limit) : all;
+      return {
+        entries: top,
+        total: total,
+        allTotal: all.length,
+        truncated: all.length > top.length,
+        hiddenCount: Math.max(0, all.length - top.length)
+      };
+    },
+    auditFunnel() {
+      const stats = state.runtimeStats || {};
+      const num = key => Number(stats[key]) || 0;
+      const auditTotal = num('audit_total');
+      const skipped = num('audit_skipped_cache') + num('audit_skipped_probability');
+      const noRules = num('audit_skipped_no_rules');
+      const failed = num('audit_failed');
+      const safe = num('safe_total');
+      const violations = state.records.length;
+      const audited = auditTotal + skipped + noRules;
+      return {
+        auditTotal: auditTotal,
+        skipped: skipped,
+        skippedCache: num('audit_skipped_cache'),
+        skippedProbability: num('audit_skipped_probability'),
+        noRules: noRules,
+        failed: failed,
+        safe: safe,
+        violations: violations,
+        audited: audited,
+        hasData: audited > 0 || safe > 0 || violations > 0
+      };
+    },
+    pendingItems() {
+      return (state.pending || []).slice();
     },
     tagCounts() {
       const counts = new Map();

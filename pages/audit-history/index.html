@@ -26,7 +26,7 @@
         </span>
         <span class="brand-text">
           <strong>ImageGuard</strong>
-          <em id="brand-version">v1.8.0</em>
+          <em id="brand-version">v1.9.0</em>
         </span>
       </a>
 
@@ -74,6 +74,18 @@
 
   <main class="main" id="main" tabindex="-1">
     <div class="container">
+      <!-- ══ 处理中 ══ -->
+      <section class="pending-strip" id="pending-strip" aria-live="polite" hidden>
+        <div class="pending-head">
+          <span class="pending-title">
+            <span class="pending-dot" aria-hidden="true"></span>
+            <strong id="pending-count">0 张图片正在审核</strong>
+          </span>
+          <span class="pending-note">命中违规会在此转为审核记录，判定安全的图片直接丢弃，不写入历史</span>
+          <button class="link-btn" type="button" id="pending-toggle" aria-expanded="true">收起</button>
+        </div>
+        <div class="pending-list" id="pending-list"></div>
+      </section>
 
       <!-- ══ 概览 ══ -->
       <section class="view" data-view-panel="overview" aria-labelledby="ov-title" hidden>
@@ -119,6 +131,18 @@
             <span class="kpi-foot" id="stat-calls-foot">尚未记录调用</span>
             <span class="kpi-line" aria-hidden="true"><i id="stat-calls-bar"></i></span>
           </article>
+          <article class="kpi" data-tone="accent">
+            <span class="kpi-label">已审核图片</span>
+            <strong class="kpi-value" id="stat-audited">0</strong>
+            <span class="kpi-foot" id="stat-audited-foot">缓存跳过 0 · 抽查跳过 0</span>
+            <span class="kpi-line" aria-hidden="true"><i id="stat-audited-bar"></i></span>
+          </article>
+          <article class="kpi" data-tone="success">
+            <span class="kpi-label">判定安全并丢弃</span>
+            <strong class="kpi-value" id="stat-safe">0</strong>
+            <span class="kpi-foot" id="stat-safe-foot">未写入历史记录</span>
+            <span class="kpi-line" aria-hidden="true"><i id="stat-safe-bar"></i></span>
+          </article>
         </section>
 
         <div class="bento">
@@ -147,7 +171,10 @@
               </div>
               <button class="link-btn" type="button" data-goto="settings" data-section="providers">管理</button>
             </header>
-            <div class="card-body" id="provider-stats"></div>
+            <div class="card-body">
+              <div class="provider-scroll" id="provider-stats"></div>
+              <p class="provider-more" id="provider-more" hidden></p>
+            </div>
           </section>
 
           <section class="card span-7" aria-labelledby="recent-title">

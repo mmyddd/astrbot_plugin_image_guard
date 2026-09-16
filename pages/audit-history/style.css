@@ -287,9 +287,65 @@ svg { display: block; width: 100%; height: 100%; }
 .link-btn { color: var(--brand-strong); font-size: 12px; font-weight: 660; white-space: nowrap; border-radius: 6px; }
 .link-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 
+/* ── 处理中任务 ─────────────────────────────────────────── */
+.pending-strip {
+  margin-bottom: 18px; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand) 26%, var(--line));
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--brand-soft), var(--card) 78%);
+  box-shadow: var(--shadow-1);
+  animation: rise .24s cubic-bezier(.22, .61, .36, 1) both;
+}
+.pending-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pending-title { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.pending-title strong { font-weight: 720; }
+.pending-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--brand);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent);
+  animation: pending-pulse 1.5s ease-out infinite;
+}
+@keyframes pending-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.pending-note { color: var(--text-3); font-size: 11px; }
+.pending-head .link-btn { margin-left: auto; }
+.pending-list { display: grid; gap: 8px; margin-top: 11px; }
+.pending-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--card);
+}
+.pending-thumb {
+  position: relative; display: grid; place-items: center;
+  width: 48px; height: 48px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r-xs);
+  background: var(--card-sunken);
+}
+.pending-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.pending-thumb::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--card) 62%, transparent) 50%, transparent 80%);
+  background-size: 220% 100%; animation: shimmer 1.4s linear infinite;
+}
+.pending-thumb-empty { width: 48px; height: 48px; border-radius: var(--r-xs); background: var(--card-sunken); border: 1px solid var(--line); }
+@keyframes shimmer { to { background-position: -220% 0; } }
+.pending-main { display: grid; gap: 4px; min-width: 0; }
+.pending-main strong { font-size: 12.5px; font-weight: 660; }
+.pending-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pending-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 9px; border-radius: var(--r-pill);
+  background: var(--brand-soft); color: var(--brand-strong);
+  font-size: 10.5px; font-weight: 700; white-space: nowrap;
+}
+.pending-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: pulse 1.1s ease-in-out infinite; }
+.pending-strip[data-collapsed="1"] .pending-list { display: none; }
+
 /* ── KPI 带 ─────────────────────────────────────────────── */
 .kpi-band {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
   border: 1px solid var(--line); border-radius: var(--r-lg);
   background: var(--card); box-shadow: var(--shadow-1);
   overflow: hidden;
@@ -305,6 +361,9 @@ svg { display: block; width: 100%; height: 100%; }
 .kpi[data-tone="danger"] .kpi-line i { background: var(--danger); }
 .kpi[data-tone="accent"] .kpi-line i { background: var(--accent); }
 .kpi[data-tone="brand"] .kpi-line i { background: var(--brand); }
+.kpi[data-tone="success"] .kpi-value { color: var(--success); }
+.kpi[data-tone="success"] .kpi-line i { background: var(--success); }
+.kpi-value-sm { font-size: 24px; }
 
 /* ── Bento 网格 ─────────────────────────────────────────── */
 .bento { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
@@ -351,6 +410,20 @@ svg { display: block; width: 100%; height: 100%; }
 .chart-axis { color: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ── 供应商统计 ─────────────────────────────────────────── */
+/* 供应商数量不可控，面板高度必须封顶，否则会把整页拉长 */
+.provider-scroll {
+  max-height: 264px; overflow-y: auto; overscroll-behavior: contain;
+  padding-right: 6px; margin-right: -6px;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+  /* 行高不固定，用渐隐提示"下面还有内容"，避免出现半截卡片像渲染错误 */
+  mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent 100%);
+}
+.provider-scroll::-webkit-scrollbar { width: 8px; }
+.provider-scroll::-webkit-scrollbar-track { background: transparent; }
+.provider-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border: 2px solid transparent; background-clip: content-box; border-radius: 999px; }
+.provider-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
+
 .provider-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 12px; padding: 9px 0; }
 .provider-row + .provider-row { border-top: 1px solid var(--line); }
 .provider-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; font-weight: 650; }
@@ -362,6 +435,11 @@ svg { display: block; width: 100%; height: 100%; }
 .provider-track { flex: 1 1 auto; height: 5px; overflow: hidden; border-radius: 999px; background: var(--card-sunken); }
 .provider-fill { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand), var(--accent)); transition: width .5s ease; }
 .provider-pct { flex: 0 0 auto; color: var(--text-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.provider-more {
+  margin-top: 10px; padding-top: 9px;
+  border-top: 1px dashed var(--line);
+  color: var(--text-3); font-size: 10.5px;
+}
 
 /* ── 记录卡片流 ─────────────────────────────────────────── */
 .feed { display: grid; gap: 10px; }
@@ -692,11 +770,22 @@ svg { display: block; width: 100%; height: 100%; }
 @keyframes toast-out { to { opacity: 0; transform: translateY(6px); } }
 
 /* ── 响应式 ─────────────────────────────────────────────── */
+@media (max-width: 1280px) {
+  .kpi-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpi:nth-child(3n + 1) { border-left: 0; }
+  .kpi:nth-child(n + 4) { border-top: 1px solid var(--line); }
+}
+
 @media (max-width: 1140px) {
   .span-4, .span-5, .span-7, .span-8 { grid-column: span 12; }
+}
+
+@media (max-width: 900px) {
   .kpi-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kpi:nth-child(3), .kpi:nth-child(4) { border-top: 1px solid var(--line); }
-  .kpi:nth-child(3) { border-left: 0; }
+  .kpi:nth-child(3n + 1) { border-left: 1px solid var(--line); }
+  .kpi:nth-child(2n + 1) { border-left: 0; }
+  .kpi:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .kpi:nth-child(3) { border-top: 1px solid var(--line); }
 }
 
 @media (max-width: 860px) {

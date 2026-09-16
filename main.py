@@ -4,6 +4,7 @@ import httpx
 import json
 import random
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from .cache import ImageAuditCache
@@ -38,6 +39,24 @@ SECRET_MASK = "********"
 """配置接口中敏感字段的掩码值，避免 API Key 明文回传页面。"""
 SECRET_FIELDS = ("api_key",)
 """llm_providers 条目中需要掩码的字段。"""
+
+PENDING_TTL_SECONDS = 900
+"""单条“处理中”任务的最大存活时间，超时视为异常残留并被清理。"""
+PENDING_MAX_ITEMS = 32
+"""页面同时展示的“处理中”任务上限，超出时丢弃最旧的一条。"""
+PENDING_PREVIEW_MAX_BYTES = 512 * 1024
+"""为处理中的任务预生成的预览 data URL 上限（字节），仅用于页面预览。"""
+
+AUDIT_STAT_KEYS = (
+    "audit_total",
+    "audit_skipped_cache",
+    "audit_skipped_probability",
+    "audit_skipped_no_rules",
+    "audit_failed",
+    "safe_total",
+    "safe_discarded",
+)
+"""KV 中的审核运行统计字段。"""
 
 _EDITABLE_LIST_FIELDS = ("group_scope", "private_scope", "sensitive_texts", "forbidden_descriptions")
 _EDITABLE_TEXT_FIELDS = ("custom_vision_prompt", "reasoning_effort", "report_target_id")
@@ -183,7 +202,7 @@ def _parse_audit_tags(response_text: str) -> list[str]:
     return _normalize_audit_tags(parsed)
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.8.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.9.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -198,6 +217,10 @@ class ImageGuard(Star):
             threshold=cache_threshold, max_entries=cache_max_entries
         )
         self._audit_cache_loaded = False
+
+        # ── 处理中的审核任务（仅内存，不持久化；命中违规才写入历史）──
+        self._pending_audits: dict[str, dict] = {}
+        self._pending_seq = 0
 
         # ── 审核历史 API ──
         context.register_web_api(
@@ -249,11 +272,131 @@ class ImageGuard(Star):
             "保存 LLM 供应商列表并重载",
         )
         context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/pending",
+            self._api_audit_pending,
+            ["GET"],
+            "获取正在处理的审核任务",
+        )
+        context.register_web_api(
             "/astrbot_plugin_image_guard/audit/storage/prune",
             self._api_audit_storage_prune,
             ["POST", "DELETE"],
             "清理没有对应记录的本地图片",
         )
+
+    # ── 运行统计（KV）──────────────────────────────────────
+
+    async def _load_audit_stats(self) -> dict:
+        stats = await self.get_kv_data("audit_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+        return stats
+
+    async def _bump_audit_stats(self, **deltas: int) -> None:
+        """累加运行统计，用于页面区分“审核了多少张”与“保存了多少条”。"""
+        if not deltas:
+            return
+        stats = await self._load_audit_stats()
+        for key, value in deltas.items():
+            if key not in AUDIT_STAT_KEYS:
+                continue
+            current = stats.get(key, 0)
+            stats[key] = int(current) + int(value) if isinstance(current, (int, float)) else int(value)
+        await self.put_kv_data("audit_stats", stats)
+
+    # ── 处理中的任务───────────────────────────────────────
+
+    def _cleanup_pending(self) -> None:
+        """清理超时或超量的“处理中”任务。"""
+        now = time.time()
+        expired = [
+            key
+            for key, item in self._pending_audits.items()
+            if now - float(item.get("started_at", now)) > PENDING_TTL_SECONDS
+        ]
+        for key in expired:
+            self._pending_audits.pop(key, None)
+
+        if len(self._pending_audits) <= PENDING_MAX_ITEMS:
+            return
+        ordered = sorted(
+            self._pending_audits.items(), key=lambda kv: float(kv[1].get("started_at", 0))
+        )
+        for key, _ in ordered[: len(self._pending_audits) - PENDING_MAX_ITEMS]:
+            self._pending_audits.pop(key, None)
+
+    def _pending_start(
+        self,
+        image_count: int,
+        group_id: str,
+        user_id: str,
+        user_name: str,
+        preview: str = "",
+    ) -> str:
+        """登记一条“送审中”任务，返回任务 id。"""
+        self._cleanup_pending()
+        self._pending_seq += 1
+        task_id = f"{int(time.time() * 1000)}-{self._pending_seq}"
+        self._pending_audits[task_id] = {
+            "id": task_id,
+            "status": "pending",
+            "started_at": time.time(),
+            "image_count": int(image_count),
+            "group_id": group_id,
+            "user_id": user_id,
+            "user_name": user_name,
+            "preview": preview,
+        }
+        return task_id
+
+    def _pending_finish(self, task_id: str | None) -> None:
+        """任务结束（命中违规已写入历史，否则丢弃）后移除该条记录。"""
+        if task_id:
+            self._pending_audits.pop(task_id, None)
+
+    def _pending_snapshot(self) -> list[dict]:
+        """返回当前处理中的任务（不含图片内容）。"""
+        self._cleanup_pending()
+        now = time.time()
+        items = []
+        for item in self._pending_audits.values():
+            started = float(item.get("started_at", now))
+            items.append(
+                {
+                    "id": item.get("id"),
+                    "status": item.get("status", "pending"),
+                    "started_at": started,
+                    "elapsed_seconds": max(0.0, round(now - started, 1)),
+                    "image_count": item.get("image_count", 0),
+                    "group_id": item.get("group_id", ""),
+                    "user_id": item.get("user_id", ""),
+                    "user_name": item.get("user_name", ""),
+                }
+            )
+        items.sort(key=lambda entry: entry["started_at"])
+        return items
+
+    def _pending_preview(self, image_url: str) -> str:
+        """为处理中的任务准备一张小预览图（仅在内存中，不落盘）。"""
+        try:
+            if not image_url or len(image_url) > PENDING_PREVIEW_MAX_BYTES:
+                return ""
+            if not image_url.startswith("data:image/"):
+                return ""
+            header, encoded = image_url.split(",", 1)
+            raw = base64.b64decode(encoded)
+            result = compress_image_with_result(raw, PENDING_PREVIEW_MAX_BYTES)
+            return result.data_url or ""
+        except Exception as e:
+            logger.debug(f"[ImageGuard] 预览图生成失败: {e}")
+            return ""
+
+    async def _api_audit_pending(self) -> dict:
+        """供页面轮询：哪些图片正在审核。"""
+        return {
+            "pending": self._pending_snapshot(),
+            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     # ── 审核缓存持久化 ─────────────────────────────────────────
 
@@ -356,6 +499,7 @@ class ImageGuard(Star):
                     sending_fingerprints.append(fp)
             if not sending_urls:
                 logger.info("[ImageGuard] 所有图片均已多次审核，跳过本次审核")
+                await self._bump_audit_stats(audit_skipped_cache=1)
                 return
 
             # 去重：同一消息中相同的图片只送审一次，避免浪费 LLM 调用和计数膨胀
@@ -376,6 +520,7 @@ class ImageGuard(Star):
         # === 6. 概率抽查 ===
         if random.random() > self.config.get("check_probability", 1.0):
             logger.info("[ImageGuard] 概率抽查跳过")
+            await self._bump_audit_stats(audit_skipped_probability=1)
             return
 
         # === 7. 检查配置 ===
@@ -384,6 +529,7 @@ class ImageGuard(Star):
 
         if not forbidden_texts and not forbidden_descs:
             logger.info("[ImageGuard] 未配置审查规则，跳过")
+            await self._bump_audit_stats(audit_skipped_no_rules=1)
             return
 
         # === 8. 审核逻辑 ===
@@ -402,6 +548,16 @@ class ImageGuard(Star):
             "标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"
         )
 
+        # ── 处理中状态：先在 WebUI 上登记，命中违规才会转为历史记录，否则丢弃 ──
+        pending_id = self._pending_start(
+            image_count=len(image_urls),
+            group_id=group_id,
+            user_id=user_id,
+            user_name=event.get_sender_name() or "",
+            preview=self._pending_preview(image_urls[0]) if image_urls else "",
+        )
+        await self._bump_audit_stats(audit_total=1)
+
         try:
             # v4.26+ 图片在提取时已压缩为 data URL，无需 prepare_audit_images 再次处理
             logger.info(f"[ImageGuard] 开始审核，共 {len(image_urls)} 张图片")
@@ -414,6 +570,7 @@ class ImageGuard(Star):
                 for fp in sending_fingerprints:
                     self._audit_cache.record_audit(fp)
                 await self._save_audit_cache()
+                await self._bump_audit_stats(cache_records=len(sending_fingerprints))
 
             # === 9. 解析结果 ===
             result_match = _RESULT_RE.search(response_text)
@@ -446,9 +603,16 @@ class ImageGuard(Star):
                     reason_str,
                     audit_tags,
                 )
+            else:
+                # SAFE：不写入历史、不保留图片，直接丢弃
+                logger.info(f"[ImageGuard] 审核通过（SAFE），丢弃该次结果: {reason_str}")
+                await self._bump_audit_stats(safe_total=1, safe_discarded=1)
 
         except Exception as e:
             logger.error(f"[ImageGuard] Check failed: {e}")
+            await self._bump_audit_stats(audit_failed=1)
+        finally:
+            self._pending_finish(pending_id)
 
     # ── 多供应商调用核心 ──────────────────────────────────────
 
@@ -880,9 +1044,12 @@ class ImageGuard(Star):
                             r["local_image_url"] = f"/api/file/{token}"
                         except Exception as e:
                             logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
+        runtime_stats = await self._load_audit_stats()
         records_json = json.dumps(records, ensure_ascii=False).encode("utf-8")
         return {
             "records": records,
+            "runtime_stats": runtime_stats,
+            "pending": self._pending_snapshot(),
             "provider_stats": stats,
             "cache_stats": cache_stats,
             "storage_size": {
