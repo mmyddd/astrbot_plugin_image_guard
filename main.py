@@ -55,10 +55,115 @@ AUDIT_STAT_KEYS = (
     "audit_failed",
     "safe_total",
     "safe_discarded",
+    # 审核耗时（毫秒）：累计值 / 样本数 / 峰值，以及按结果拆分
+    "audit_ms_total",
+    "audit_ms_count",
+    "audit_ms_max",
+    "audit_ms_safe_total",
+    "audit_ms_violation_total",
 )
 """KV 中的审核运行统计字段。"""
 
-_EDITABLE_LIST_FIELDS = ("group_scope", "private_scope", "sensitive_texts", "forbidden_descriptions")
+_EDITABLE_LIST_FIELDS = (
+    "group_scope",
+    "private_scope",
+    "audit_whitelist",
+    "sensitive_texts",
+    "forbidden_descriptions",
+)
+
+
+# 黑名单插件（dahetaoa/AstrBot-ban-Plugins）使用的 sp 存储键
+BAN_PLUGIN_GLOBAL_KEY = "ban_plugin_global_ban"
+BAN_PLUGIN_GROUP_KEY = "ban_plugin_group_ban"
+BAN_PLUGIN_ALLOW_KEY = "ban_plugin_group_allow"
+BAN_PLUGIN_ENABLE_KEY = "ban_plugin_enable"
+
+
+def _sp_get(key: str, default: object) -> object:
+    """读取 AstrBot 插件共享存储（sp）中的值。
+
+    黑名单插件通过 `from astrbot.api import sp` 持久化禁用名单，这里用同一通道
+    读取其状态，从而在事件被它拦截前先自行判断，保持两边行为一致。
+
+    Args:
+        key: 存储键。
+        default: 读取失败或键不存在时返回的默认值。
+
+    Returns:
+        取到的值，异常时返回 default。"""
+    try:
+        from astrbot.api import sp
+    except ImportError:
+        return default
+    try:
+        value = sp.get(key, default)
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def _hit_ban_plugin(user_id: str, group_id: str) -> bool:
+    """判断用户是否被黑名单插件（ban_plugin）禁用。
+
+    复刻其 is_banned 语义：群内局部例外优先放行，其次看全局禁用，最后看群禁用。
+
+    Args:
+        user_id: 发送者 QQ。
+        group_id: 群号，私聊时为空字符串。
+
+    Returns:
+        True 表示该用户已被黑名单插件禁用。"""
+    if not user_id:
+        return False
+    if not _as_bool(_sp_get(BAN_PLUGIN_ENABLE_KEY, True)):
+        return False
+
+    target = str(user_id).strip()
+    group = str(group_id or "").strip()
+
+    allow_map = _sp_get(BAN_PLUGIN_ALLOW_KEY, {})
+    if isinstance(allow_map, dict) and group:
+        allowed = allow_map.get(group)
+        if isinstance(allowed, (list, tuple, set)) and any(
+            str(item).strip() == target for item in allowed
+        ):
+            return False
+
+    global_list = _sp_get(BAN_PLUGIN_GLOBAL_KEY, [])
+    if isinstance(global_list, (list, tuple, set)) and any(
+        str(item).strip() == target for item in global_list
+    ):
+        return True
+
+    group_map = _sp_get(BAN_PLUGIN_GROUP_KEY, {})
+    if isinstance(group_map, dict) and group:
+        group_list = group_map.get(group)
+        if isinstance(group_list, (list, tuple, set)) and any(
+            str(item).strip() == target for item in group_list
+        ):
+            return True
+
+    return False
+
+
+def _hit_whitelist(user_id: str, raw_whitelist: object) -> bool:
+    """用户是否在审核白名单内（名单内用户的消息既不审核也不记录）。
+
+支持列表或以逗号/换行分隔的字符串；空值一律视为未启用。"""
+    if not user_id:
+        return False
+    entries = raw_whitelist
+    if isinstance(entries, str):
+        entries = re.split(r"[,，\s]+", entries)
+    if not isinstance(entries, (list, tuple, set)):
+        return False
+    target = str(user_id).strip()
+    for entry in entries:
+        value = str(entry).strip()
+        if value and value == target:
+            return True
+    return False
 _EDITABLE_TEXT_FIELDS = ("custom_vision_prompt", "reasoning_effort", "report_target_id")
 _EDITABLE_DICT_LIST_FIELDS = ("group_report_targets",)
 _EDITABLE_BOOL_FIELDS = ("enable_recall", "audit_cache_enabled", "keep_compressed_image_in_temp", "debug_log_llm_response")
@@ -202,7 +307,7 @@ def _parse_audit_tags(response_text: str) -> list[str]:
     return _normalize_audit_tags(parsed)
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.9.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.12.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -303,6 +408,21 @@ class ImageGuard(Star):
             current = stats.get(key, 0)
             stats[key] = int(current) + int(value) if isinstance(current, (int, float)) else int(value)
         await self.put_kv_data("audit_stats", stats)
+
+    async def _record_audit_duration(self, started_at: float, is_violation: bool) -> float:
+        """记录一次审核耗时（毫秒），返回本次耗时。"""
+        elapsed_ms = max(0.0, (time.time() - started_at) * 1000)
+        stats = await self._load_audit_stats()
+        previous_max = stats.get("audit_ms_max", 0)
+        previous_max = float(previous_max) if isinstance(previous_max, (int, float)) else 0.0
+        await self._bump_audit_stats(
+            audit_ms_total=int(elapsed_ms),
+            audit_ms_count=1,
+            audit_ms_max=int(max(previous_max, elapsed_ms)) - int(previous_max),
+            audit_ms_violation_total=int(elapsed_ms) if is_violation else 0,
+            audit_ms_safe_total=0 if is_violation else int(elapsed_ms),
+        )
+        return elapsed_ms
 
     # ── 处理中的任务───────────────────────────────────────
 
@@ -416,12 +536,29 @@ class ImageGuard(Star):
 
     # ── 消息处理入口 ────────────────────────────────────────────
 
-    @filter.event_message_type(filter.EventMessageType.ALL)
+    # priority 必须高于拦截类插件（如黑名单插件会 stop_event()）。
+    # 事件被拦截后 AstrBot 会中断后续 handler，本插件将完全收不到消息。
+    @filter.event_message_type(
+        filter.EventMessageType.ALL,
+        priority=100,
+    )
     async def on_image_message(self, event: AstrMessageEvent):
         # === 1. 范围控制逻辑 ===
         group_id = event.get_group_id() or ""
         user_id = event.get_sender_id() or ""
         is_group = bool(group_id)
+
+        # === 1.1 黑名单插件兼容（可选） ===
+        # 默认不跳过：审核是静默动作，不回复用户，不违背「禁用 bot」的本意，
+        # 同时避免被禁用户借机发送违规图片。需要与该插件完全一致时可开启。
+        if self.config.get("skip_audit_for_banned", False) and _hit_ban_plugin(user_id, group_id):
+            logger.debug(f"[ImageGuard] 用户 {user_id} 已被黑名单插件禁用，按配置跳过审核")
+            return
+
+        # === 1.2 审核白名单：名单内用户直接放行，既不审核也不记录 ===
+        if _hit_whitelist(user_id, self.config.get("audit_whitelist", [])):
+            logger.debug(f"[ImageGuard] 用户 {user_id} 在审核白名单内，跳过")
+            return
 
         group_scope = [str(x) for x in self.config.get("group_scope", ["0"])]
         private_scope = [str(x) for x in self.config.get("private_scope", [])]
@@ -557,6 +694,7 @@ class ImageGuard(Star):
             preview=self._pending_preview(image_urls[0]) if image_urls else "",
         )
         await self._bump_audit_stats(audit_total=1)
+        audit_started_at = time.time()
 
         try:
             # v4.26+ 图片在提取时已压缩为 data URL，无需 prepare_audit_images 再次处理
@@ -592,9 +730,10 @@ class ImageGuard(Star):
                 reason_str = response_text.split('\n')[0][:50]
 
             # === 10. 判罚 ===
+            elapsed_ms = await self._record_audit_duration(audit_started_at, is_violation)
             if is_violation:
                 audit_tags = parsed_tags
-                logger.info(f"[ImageGuard] 违规命中: {reason_str}")
+                logger.info(f"[ImageGuard] 违规命中: {reason_str}（用时 {elapsed_ms / 1000:.1f}s）")
                 # image_paths[0] 是原始本地文件，用于上报和持久化（非压缩 data URL）
                 await self.enforce_penalty(
                     event,
@@ -602,14 +741,19 @@ class ImageGuard(Star):
                     is_group,
                     reason_str,
                     audit_tags,
+                    audit_ms=int(elapsed_ms),
                 )
             else:
                 # SAFE：不写入历史、不保留图片，直接丢弃
-                logger.info(f"[ImageGuard] 审核通过（SAFE），丢弃该次结果: {reason_str}")
+                logger.info(
+                    f"[ImageGuard] 审核通过（SAFE），丢弃该次结果: {reason_str}"
+                    f"（用时 {elapsed_ms / 1000:.1f}s）"
+                )
                 await self._bump_audit_stats(safe_total=1, safe_discarded=1)
 
         except Exception as e:
-            logger.error(f"[ImageGuard] Check failed: {e}")
+            failed_ms = max(0.0, (time.time() - audit_started_at) * 1000)
+            logger.error(f"[ImageGuard] Check failed ({failed_ms / 1000:.1f}s): {e}")
             await self._bump_audit_stats(audit_failed=1)
         finally:
             self._pending_finish(pending_id)
@@ -757,6 +901,7 @@ class ImageGuard(Star):
         is_group: bool,
         reason: str,
         tags: list[str] | None = None,
+        audit_ms: int | None = None,
     ):
         """执行判罚 (依赖 OneBot 协议)"""
         user_id = event.get_sender_id()
@@ -843,7 +988,7 @@ class ImageGuard(Star):
         try:
             await self._save_audit_record(
                 event, violation_img_url, reason,
-                recalled, banned, duration, is_group, tags,
+                recalled, banned, duration, is_group, tags, audit_ms,
             )
         except Exception as e:
             logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
@@ -909,6 +1054,7 @@ class ImageGuard(Star):
         duration: int,
         is_group: bool,
         tags: list[str] | None = None,
+        audit_ms: int | None = None,
     ) -> None:
         record = {
             "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
@@ -923,6 +1069,7 @@ class ImageGuard(Star):
             "banned": banned,
             "ban_duration": duration,
             "is_group": is_group,
+            "audit_ms": max(0, int(audit_ms)) if audit_ms is not None else None,
         }
         # 持久化原始图片（HTTP URL、本地路径、data URL 均支持）
         if image_url:
@@ -1045,6 +1192,21 @@ class ImageGuard(Star):
                         except Exception as e:
                             logger.warning(f"[ImageGuard] file_token 注册失败: {e}")
         runtime_stats = await self._load_audit_stats()
+        runtime_stats["audit_ms_avg"] = (
+            round(runtime_stats.get("audit_ms_total", 0) / runtime_stats.get("audit_ms_count", 1))
+            if runtime_stats.get("audit_ms_count")
+            else 0
+        )
+        runtime_stats["audit_ms_safe_avg"] = (
+            round(runtime_stats.get("audit_ms_safe_total", 0) / max(1, runtime_stats.get("safe_total", 0)))
+            if runtime_stats.get("safe_total")
+            else 0
+        )
+        runtime_stats["audit_ms_violation_avg"] = (
+            round(runtime_stats.get("audit_ms_violation_total", 0) / max(1, len(records)))
+            if records
+            else 0
+        )
         records_json = json.dumps(records, ensure_ascii=False).encode("utf-8")
         return {
             "records": records,
@@ -1086,6 +1248,7 @@ class ImageGuard(Star):
         return {
             "group_scope": _as_text_list(self.config.get("group_scope", ["0"])) or ["0"],
             "private_scope": _as_text_list(self.config.get("private_scope", [])),
+            "whitelist_count": len(_as_text_list(self.config.get("audit_whitelist", []))),
             "rule_count": len(_as_text_list(self.config.get("sensitive_texts", [])))
             + len(_as_text_list(self.config.get("forbidden_descriptions", []))),
             "provider_count": len(providers),
@@ -1094,6 +1257,7 @@ class ImageGuard(Star):
             "enable_recall": _as_bool(self.config.get("enable_recall", True)),
             "ban_duration": _as_int(self.config.get("ban_duration", 86400), 86400),
             "cache_enabled": _as_bool(self.config.get("audit_cache_enabled", True)),
+            "skip_banned": _as_bool(self.config.get("skip_audit_for_banned", False)),
             "report_enabled": bool(str(self.config.get("report_target_id", "")).strip())
             or bool(_as_list(self.config.get("group_report_targets", []))),
         }

@@ -55,6 +55,15 @@
       const minutes = Math.floor(n / 60);
       return minutes + ' 分 ' + Math.round(n % 60) + ' 秒';
     },
+    // 审核耗时统一按毫秒存储，展示时按量级切换单位
+    ms(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) return '—';
+      if (n < 1000) return Math.round(n) + ' ms';
+      if (n < 60000) return (n / 1000).toFixed(1) + ' 秒';
+      const minutes = Math.floor(n / 60000);
+      return minutes + ' 分 ' + Math.round((n % 60000) / 1000) + ' 秒';
+    },
     duration(seconds) {
       const n = Number(seconds);
       if (!Number.isFinite(n) || n <= 0) return '不禁言';
@@ -299,6 +308,9 @@
       const safe = num('safe_total');
       const violations = state.records.length;
       const audited = auditTotal + skipped + noRules;
+      const msTotal = num('audit_ms_total');
+      const msCount = num('audit_ms_count');
+      const safeCount = num('safe_total');
       return {
         auditTotal: auditTotal,
         skipped: skipped,
@@ -309,7 +321,14 @@
         safe: safe,
         violations: violations,
         audited: audited,
-        hasData: audited > 0 || safe > 0 || violations > 0
+        // 审核用时（毫秒）
+        msTotal: msTotal,
+        msCount: msCount,
+        msAvg: msCount > 0 ? msTotal / msCount : 0,
+        msMax: num('audit_ms_max'),
+        msSafeAvg: safeCount > 0 ? num('audit_ms_safe_total') / safeCount : 0,
+        msViolationAvg: violations > 0 ? num('audit_ms_violation_total') / violations : 0,
+        hasData: audited > 0 || safe > 0 || violations > 0 || msCount > 0
       };
     },
     pendingItems() {
@@ -495,7 +514,7 @@
 
   /* ── CSV 导出 ─────────────────────────────────────────── */
   function exportCsv(records, filename) {
-    const header = ['时间', '用户', '用户ID', '来源', '判定理由', '标签', '撤回', '禁言', '禁言时长(秒)'];
+    const header = ['时间', '用户', '用户ID', '来源', '判定理由', '标签', '撤回', '禁言', '禁言时长(秒)', '审核用时(毫秒)'];
     const rows = records.map(record => [
       record.time || '',
       record.user_name || '',
@@ -505,7 +524,8 @@
       (record.tags || []).join(' '),
       record.recalled ? '已撤回' : '撤回失败',
       record.banned ? '已禁言' : '未禁言',
-      record.ban_duration || 0
+      record.ban_duration || 0,
+      Number(record.audit_ms) > 0 ? Math.round(Number(record.audit_ms)) : ''
     ]);
     const csv = [header].concat(rows).map(line =>
       line.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(',')

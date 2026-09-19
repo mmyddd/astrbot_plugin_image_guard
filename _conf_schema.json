@@ -17,6 +17,21 @@
       "type": "string"
     }
   },
+  "audit_whitelist": {
+    "description": "审核白名单：名单内用户发送的图片既不审核也不记录，直接放行。群聊与私聊均生效（按发送者 QQ 判断）。",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    },
+    "hint": "填写用户 QQ 号，每行一个；留空表示不使用白名单"
+  },
+  "skip_audit_for_banned": {
+    "description": "是否跳过被黑名单插件禁用的用户。默认关闭：即使该用户已被 dahetaoa/AstrBot-ban-Plugins 禁用，本插件仍会审核其图片——审核是静默的群组保护动作，不会回复用户，因此不违背「禁用 bot」的本意，同时避免被禁用户借机发送违规图片。开启后本插件将与黑名单插件行为完全一致。",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭（推荐）= 黑名单用户仍被审核；开启 = 黑名单用户完全不审核"
+  },
   "reasoning_effort": {
     "description": "设置 LLM API 请求中的 reasoning_effort 参数（如 DeepSeek 模型支持 low/medium/high）。用于控制模型推理深度：low=快速低消耗，medium=适中，high=深度推理更严谨。设为空字符串则不传递此参数（兼容不支持此参数的模型）。",
     "type": "string",

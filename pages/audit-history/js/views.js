@@ -154,7 +154,7 @@
       setBar('stat-calls-bar', 0);
     }
 
-    // ── 审核漏斗：送审了多少、跳过了多少、多少被判安全丢弃 ──
+    // ── 审核漏斗：送审了多少、跳过了多少、多少被判安全丢弃，以及单张平均用时 ──
     const funnel = derive.auditFunnel();
     if (funnel.hasData) {
       setText('stat-audited', format.int(funnel.audited));
@@ -164,6 +164,20 @@
         (funnel.noRules ? ' · 无规则 ' + format.int(funnel.noRules) : ''));
       const skipRate = funnel.audited > 0 ? Math.round(funnel.skipped / funnel.audited * 100) : 0;
       setBar('stat-audited-bar', skipRate);
+
+      // ── 审核用时 ──
+      if (funnel.msCount > 0) {
+        setText('stat-duration', format.ms(funnel.msAvg));
+        setText('stat-duration-foot',
+          '样本 ' + format.int(funnel.msCount) + ' 次 · 峰值 ' + format.ms(funnel.msMax));
+        // 进度条按 30 秒基准表示相对耗时，超过则封顶
+        setBar('stat-duration-bar', Math.min(100, funnel.msAvg / 30000 * 100));
+      } else {
+        setText('stat-duration', '—');
+        setText('stat-duration-foot', '尚无耗时样本');
+        setBar('stat-duration-bar', 0);
+      }
+
       setText('stat-safe', format.int(funnel.safe));
       setText('stat-safe-foot', funnel.auditTotal > 0
         ? '占送审 ' + format.percent(funnel.safe / funnel.auditTotal * 100) + ' · 未写入历史'
@@ -174,6 +188,9 @@
       setText('stat-audited', format.int(funnel.audited));
       setText('stat-audited-foot', '尚无审核统计');
       setBar('stat-audited-bar', 0);
+      setText('stat-duration', '—');
+      setText('stat-duration-foot', '尚无耗时样本');
+      setBar('stat-duration-bar', 0);
       setText('stat-safe', format.int(funnel.safe));
       setText('stat-safe-foot', '未写入历史记录');
       setBar('stat-safe-bar', 0);
@@ -300,8 +317,12 @@
       return;
     }
     const groups = (config.group_scope || []).join('、');
+    const whitelistCount = Number(config.whitelist_count) || 0;
     const pills = [
       { text: groups === '0' || !groups ? '群聊 · 全部' : '群聊 · ' + groups, tone: 'brand', title: '启用审查的群号' },
+      ...(whitelistCount
+        ? [{ text: '白名单 ' + format.int(whitelistCount) + ' 人', tone: 'muted', title: '名单内用户的消息不审核、不记录' }]
+        : []),
       { text: format.int(config.rule_count || 0) + ' 条规则', tone: 'accent', title: '敏感文字与违规画面描述总量' },
       { text: (config.provider_count || 0) + ' 个供应商', tone: config.provider_count ? 'muted' : 'warn', title: (config.provider_names || []).join('、') || '未配置供应商' },
       { text: config.cache_enabled ? '缓存已启用' : '缓存已关闭', tone: config.cache_enabled ? 'muted' : 'warn', title: '审核缓存状态' }
@@ -371,7 +392,11 @@
       '<div class="record-main">' +
       '<div class="record-user"><span title="' + esc(user) + '">' + esc(user) + '</span>' +
       '<span class="record-uid">' + esc(userId) + '</span>' +
-      '<span class="record-source">' + esc(source) + '</span></div>' +
+      '<span class="record-source">' + esc(source) + '</span>' +
+      (Number(record.audit_ms) > 0
+        ? '<span class="record-cost" title="本次审核调用模型的耗时">' + esc(format.ms(record.audit_ms)) + '</span>'
+        : '') +
+      '</div>' +
       '<p class="record-reason" title="' + esc(reason) + '">' + esc(reason) + '</p>' +
       tagsHtml +
       '</div>' +
@@ -630,6 +655,7 @@
       '<dt>来源</dt><dd>' + esc(record.group_id ? '群 ' + record.group_id : '私聊') + '</dd>' +
       '<dt>处置结果</dt><dd>' + esc(derive.disposeLabel(status)) + '</dd>' +
       '<dt>禁言时长</dt><dd>' + esc(format.duration(record.ban_duration)) + '</dd>' +
+      '<dt>审核用时</dt><dd>' + esc(Number(record.audit_ms) > 0 ? format.ms(record.audit_ms) : '未记录') + '</dd>' +
       '<dt>记录 ID</dt><dd>' + esc(record.id || '—') + '</dd>' +
       '</dl></div>';
 
@@ -656,15 +682,16 @@
       });
     }
 
-    body.querySelector('[data-detail-delete]').addEventListener('click', () => {
-      IG.app.deleteRecord(record.id);
-    });
-    body.querySelector('[data-detail-close]').addEventListener('click', closeDrawer);
+    // 这两个按钮在 foot 里，不能在 body 内查找，否则为空导致打开抽屉直接抛错
+    const deleteBtn = foot.querySelector('[data-detail-delete]');
+    const footerCloseBtn = foot.querySelector('[data-detail-close]');
+    if (deleteBtn) deleteBtn.addEventListener('click', () => IG.app.deleteRecord(record.id));
+    if (footerCloseBtn) footerCloseBtn.addEventListener('click', closeDrawer);
 
     IG.show($('#drawer-scrim'), true);
     IG.show(drawer, true);
-    const closeBtn = $('#drawer-close');
-    if (closeBtn) closeBtn.focus();
+    const headerCloseBtn = $('#drawer-close');
+    if (headerCloseBtn) headerCloseBtn.focus();
   }
 
   function closeDrawer() {

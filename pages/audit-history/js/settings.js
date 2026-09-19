@@ -429,6 +429,8 @@
     $('#cfg-llm_timeout_seconds').value = valueOr(config.llm_timeout_seconds, '');
     $('#cfg-group_scope').value = (config.group_scope || []).join('\n');
     $('#cfg-private_scope').value = (config.private_scope || []).join('\n');
+    $('#cfg-audit_whitelist').value = (config.audit_whitelist || []).join('\n');
+    updateWhitelistHint();
 
     const probability = Number(config.check_probability);
     const prob = Number.isFinite(probability) ? probability : 1;
@@ -436,6 +438,7 @@
     $('#prob-value').textContent = Math.round(prob * 100) + '%';
 
     $('#cfg-enable_recall').checked = truthy(config.enable_recall);
+    $('#cfg-skip_audit_for_banned').checked = truthy(config.skip_audit_for_banned);
     $('#cfg-ban_duration').value = valueOr(config.ban_duration, '');
     $('#cfg-report_target_id').value = config.report_target_id || '';
     $('#cfg-compressed_image_max_bytes').value = valueOr(config.compressed_image_max_bytes, '');
@@ -497,8 +500,10 @@
       llm_timeout_seconds: floatOr($('#cfg-llm_timeout_seconds').value, 120),
       group_scope: lines($('#cfg-group_scope').value),
       private_scope: lines($('#cfg-private_scope').value),
+      audit_whitelist: lines($('#cfg-audit_whitelist').value),
       check_probability: floatOr($('#cfg-check_probability').value, 1),
       enable_recall: $('#cfg-enable_recall').checked,
+      skip_audit_for_banned: $('#cfg-skip_audit_for_banned').checked,
       ban_duration: intOr($('#cfg-ban_duration').value, 86400),
       report_target_id: $('#cfg-report_target_id').value.trim(),
       group_report_targets: reportTargets.map(item => ({
@@ -524,6 +529,16 @@
 
   function lines(value) {
     return String(value || '').split('\n').map(item => item.trim()).filter(Boolean);
+  }
+
+  function updateWhitelistHint() {
+    const hint = $('#whitelist-hint');
+    const input = $('#cfg-audit_whitelist');
+    if (!hint || !input) return;
+    const count = lines(input.value).length;
+    hint.textContent = count
+      ? '已配置 ' + format.int(count) + ' 位用户：不审核、不记录，群聊与私聊均生效'
+      : '名单内用户的消息不审核、不记录，群聊与私聊均生效';
   }
 
   function diffPatch(full) {
@@ -762,6 +777,9 @@
     probability.addEventListener('input', () => {
       $('#prob-value').textContent = Math.round(Number(probability.value) * 100) + '%';
     });
+
+    const whitelistInput = $('#cfg-audit_whitelist');
+    if (whitelistInput) whitelistInput.addEventListener('input', updateWhitelistHint);
 
     const form = $('#section-rules').closest('.settings-main');
     if (form) {

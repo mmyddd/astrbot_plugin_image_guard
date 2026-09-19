@@ -26,7 +26,7 @@
         </span>
         <span class="brand-text">
           <strong>ImageGuard</strong>
-          <em id="brand-version">v1.9.0</em>
+          <em id="brand-version">v1.12.0</em>
         </span>
       </a>
 
@@ -136,6 +136,12 @@
             <strong class="kpi-value" id="stat-audited">0</strong>
             <span class="kpi-foot" id="stat-audited-foot">缓存跳过 0 · 抽查跳过 0</span>
             <span class="kpi-line" aria-hidden="true"><i id="stat-audited-bar"></i></span>
+          </article>
+          <article class="kpi" data-tone="brand">
+            <span class="kpi-label">审核用时</span>
+            <strong class="kpi-value" id="stat-duration">—</strong>
+            <span class="kpi-foot" id="stat-duration-foot">平均单张耗时</span>
+            <span class="kpi-line" aria-hidden="true"><i id="stat-duration-bar"></i></span>
           </article>
           <article class="kpi" data-tone="success">
             <span class="kpi-label">判定安全并丢弃</span>
@@ -381,6 +387,14 @@
                   <textarea class="textarea textarea-sm" id="cfg-private_scope" rows="3" spellcheck="false"></textarea>
                 </div>
               </div>
+              <div class="field field-block">
+                <div class="field-head">
+                  <label class="field-label" for="cfg-audit_whitelist">审核白名单</label>
+                  <span class="field-hint" id="whitelist-hint">名单内用户的消息不审核、不记录，群聊与私聊均生效</span>
+                </div>
+                <textarea class="textarea textarea-sm" id="cfg-audit_whitelist" rows="3" spellcheck="false"
+                  placeholder="填写用户 QQ 号，每行一个"></textarea>
+              </div>
               <div class="field">
                 <div class="field-head">
                   <label class="field-label" for="cfg-check_probability">抽查概率</label>
@@ -398,6 +412,14 @@
                   <span class="toggle-text">
                     <strong>撤回违规消息</strong>
                     <span>群聊中命中违规时撤回原消息，需要 Bot 具备管理员权限</span>
+                  </span>
+                </label>
+                <label class="toggle" for="cfg-skip_audit_for_banned">
+                  <input type="checkbox" id="cfg-skip_audit_for_banned">
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">
+                    <strong>跳过黑名单插件已禁用的用户</strong>
+                    <span>开启后与黑名单插件行为完全一致；默认关闭，被禁用户仍会被审核（审核是静默动作，不会回复用户）</span>
                   </span>
                 </label>
               </div>
