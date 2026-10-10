@@ -71,36 +71,63 @@ MIME_BY_PIL_FORMAT: Final = {
     "PNG": "image/png",
     "WEBP": "image/webp",
 }
-"""PIL 格式名到门控可接受 MIME 的映射，未命中的格式需要转换。"""
+"""已登记的 PIL 格式名到 MIME 的映射；未登记的格式按 image/<小写> 生成。"""
+
+GATE_ACCEPTED_PIL_FORMATS: Final = frozenset({"PNG", "JPEG", "WEBP"})
+"""门控能直接收的静态格式（PIL 格式名）。其余格式必须先转换。"""
+
+
+def detect_pil_format(image_bytes: bytes) -> str:
+    """嗅探原始图片的 PIL 格式名（GIF/JPEG/PNG/...），识别不出时返回空串。
+
+    这是格式判定的唯一依据。不能用文件后缀：QQ 等来源的图片经常带 .jpg
+    后缀却是 PNG 或 GIF 内容，按后缀拼 MIME 会直接把请求拼错。
+    """
+    try:
+        with PillowImage.open(io.BytesIO(image_bytes)) as raw:
+            return str(raw.format or "").upper()
+    except Exception:
+        return ""
 
 
 def detect_image_mime(image_bytes: bytes) -> str:
-    """按内容嗅探原始图片的 MIME 类型，识别不出时回退 JPEG。
+    """按内容嗅探原始图片的真实 MIME 类型，识别不出时回退 JPEG。
 
-    不能只看文件后缀：QQ 等来源的图片经常带 .jpg 后缀却是 PNG 或 GIF 内容，
-    门控按后缀拼 MIME 会直接把请求拼错。
+    必须如实反映格式：之前这里对查不到映射的格式一律返回 image/jpeg，
+    导致 GIF 被贴上 jpeg 标签、原始字节却原样发出，门控解析失败回 400。
     """
-    try:
-        raw = PillowImage.open(io.BytesIO(image_bytes))
-    except Exception:
-        return "image/jpeg"
-    mime = MIME_BY_PIL_FORMAT.get(str(raw.format or "").upper())
-    return mime or "image/jpeg"
+    fmt = detect_pil_format(image_bytes)
+    mime = MIME_BY_PIL_FORMAT.get(fmt)
+    if mime:
+        return mime
+    # 查不到映射不代表格式未知：PIL 认得但我们没登记的格式（GIF/BMP/TIFF…）
+    # 如实返回其标准 MIME，绝不谎报成 JPEG
+    if fmt:
+        return "image/" + fmt.lower()
+    return "image/jpeg"
+
+
+def is_gate_accepted(image_bytes: bytes) -> bool:
+    """这批字节是否已经是门控能直接收的静态格式。
+
+    判据是 PIL 实际认出的格式，不是 MIME 字符串——MIME 只用于拼 data URL，
+    拿它做放行判断会把「标签合规、内容不符」的情况放过去。
+    """
+    return detect_pil_format(image_bytes) in GATE_ACCEPTED_PIL_FORMATS
 
 
 def to_gate_accepted_data_url(image_bytes: bytes) -> str:
     """把任意图片编码成门控可接受的静态 data URL。
 
-    门控只吃 png/jpeg/webp。GIF 取第一帧转成 JPEG——动图的违规元素通常在
-    首帧就能看见，逐帧判定的成本远高于收益，不值得为它多花一次调用。
+    门控只吃 png/jpeg/webp。GIF 等其余格式取第一帧转成 JPEG——动图的违规
+    元素通常在首帧就能看见，逐帧判定的成本远高于收益，不值得为它多花一次调用。
     """
-    mime = detect_image_mime(image_bytes)
-    if mime in GATE_ACCEPTED_MIME:
-        return encode_image_to_data_url(image_bytes, mime)
+    if is_gate_accepted(image_bytes):
+        return encode_image_to_data_url(image_bytes, detect_image_mime(image_bytes))
 
     try:
-        raw = PillowImage.open(io.BytesIO(image_bytes))
-        first_frame = raw.convert("RGB")
+        with PillowImage.open(io.BytesIO(image_bytes)) as raw:
+            first_frame = raw.convert("RGB")
     except Exception:
         # 连 PIL 都解不开时按 JPEG 直送，让门控自己报错，比在这里静默丢图好
         return encode_image_to_data_url(image_bytes, "image/jpeg")

@@ -5,19 +5,17 @@
 问题与上下文和门控关闭时完全一致，避免先入为主。
 """
 
-import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-from PIL import Image as PillowImage
 
 from .image_processor import (
-    GATE_ACCEPTED_MIME,
     compress_image_with_result,
     detect_image_mime,
     encode_image_to_data_url,
+    is_gate_accepted,
     to_gate_accepted_data_url,
 )
 
@@ -41,10 +39,6 @@ GATE_DEFAULT_TIMEOUT = 15.0
 
 GATE_TEXT_TOKEN_BUDGET = 1800
 """state 文本预算。Workers AI 只读前约 2000 token，超出静默丢弃。"""
-
-GATE_ACCEPTED_IMAGE_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
-"""PIL 格式名中门控直接接受的静态格式。"""
-
 
 def _as_text_list(raw: object) -> list[str]:
     """把任意来源的规则列表规整成去空白的字符串列表。"""
@@ -163,6 +157,60 @@ def _extract_usage(payload: dict, key: str) -> float:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return float(value)
     return 0.0
+
+
+def _extract_error_detail(resp, url: str) -> str:
+    """从错误响应里取出可读原因，并附上排查建议。
+
+    OpenRouter 的错误信封是 {"error": {"message": ..., "code": ...}}，
+    但网关代理与官方错误格式不一，这里逐级兜底取 message，取不到就退回
+    响应正文片段。状态码单独列出，避免用户只看到一串 URL 猜不出问题。
+    """
+    status = getattr(resp, "status_code", "?")
+    hint = ""
+    body_text = ""
+    try:
+        raw = resp.json()
+    except Exception:
+        raw = None
+
+    if isinstance(raw, dict):
+        err = raw.get("error")
+        if isinstance(err, dict):
+            hint = str(err.get("message") or err.get("code") or "").strip()
+        elif isinstance(err, str):
+            hint = err.strip()
+        elif isinstance(raw.get("detail"), str):
+            hint = raw["detail"].strip()
+        if not hint:
+            hint = str(raw.get("message") or raw.get("detail") or "").strip()
+    if not hint:
+        try:
+            body_text = str(resp.text or "").strip()[:300]
+        except Exception:
+            body_text = ""
+        hint = body_text or "响应正文为空"
+
+    if status == 401:
+        advice = "请检查门控 API Key 是否正确、是否已过期或已被撤销"
+    elif status == 402:
+        advice = "账户额度不足，请充值或更换 Key"
+    elif status == 403:
+        advice = "该 Key 无权访问此模型或端点，请检查模型名与网关地址"
+    elif status == 404:
+        advice = "端点路径不存在，请核对网关地址或端点路径"
+    elif status == 413:
+        advice = "图片超出模型 token 窗口，请调小门控单图字节上限"
+    elif status == 429:
+        advice = "触发限流或额度上限，请稍后重试"
+    else:
+        advice = ""
+
+    parts = [hint]
+    if advice:
+        parts.append(advice)
+    parts.append(url)
+    return "；".join(parts)
 
 
 def _extract_provider(payload: dict) -> str:
@@ -322,26 +370,24 @@ class SystemOneGate:
         被 token 窗口直接拒掉。
         """
         limit = self.max_image_bytes()
-        if detect_image_mime(raw_bytes) in GATE_ACCEPTED_MIME:
-            try:
-                with PillowImage.open(io.BytesIO(raw_bytes)) as probe:
-                    native = str(probe.format or "").upper() in GATE_ACCEPTED_IMAGE_FORMATS
-            except Exception:
-                native = False
-            if native:
-                data_url = encode_image_to_data_url(raw_bytes, detect_image_mime(raw_bytes))
-                if len(data_url) <= limit:
-                    return data_url
 
-        # 超限或格式不兼容时交给现有压缩链路。注意它对 GIF 会保留动画并输出
-        # gif，而门控只吃静态图，所以必须再走一次静态帧转换。
+        # 已合规且未超限：直接送原始字节，最大化保留细节
+        if is_gate_accepted(raw_bytes):
+            data_url = encode_image_to_data_url(raw_bytes, detect_image_mime(raw_bytes))
+            if len(data_url) <= limit:
+                return data_url
+
+        # 格式不合规（GIF 等）：先归一成静态帧。必须走这一步而不是交给
+        # 压缩链路——它对 GIF 会保留动画并输出 gif，门控只吃静态图。
+        if not is_gate_accepted(raw_bytes):
+            return to_gate_accepted_data_url(raw_bytes)
+
+        # 已合规但超限：交给现有压缩链路，它会降到 jpeg
         try:
-            compressed = compress_image_with_result(raw_bytes, limit).data_url
+            return compress_image_with_result(raw_bytes, limit).data_url
         except Exception:
-            compressed = ""
-        if compressed.startswith("data:image/jpeg") or compressed.startswith("data:image/png"):
-            return compressed
-        return to_gate_accepted_data_url(raw_bytes)
+            # 压缩失败时宁可送大图，也不要把图丢掉
+            return encode_image_to_data_url(raw_bytes, detect_image_mime(raw_bytes))
 
     # ── 调用 ──────────────────────────────────────────────
 
@@ -358,9 +404,10 @@ class SystemOneGate:
         except Exception as exc:
             return GateResult(True, 0.0, "", 0.0, f"门控请求构建失败: {exc}", 0)
 
+        url = self.build_url()
         try:
             resp = await self._client.post(
-                self.build_url(),
+                url,
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self.api_key()}",
@@ -368,11 +415,22 @@ class SystemOneGate:
                 },
                 timeout=self.timeout_seconds(),
             )
-            resp.raise_for_status()
-            body = resp.json()
         except Exception as exc:
             # 不重试：门控的价值是省钱，为省一次调用加重试延迟得不偿失
             return GateResult(True, 0.0, "", 0.0, f"门控调用失败: {exc}", 0)
+
+        # 先看错误正文再抛：raise_for_status 只带状态码，OpenRouter 会把
+        # 「Key 无效 / 额度不足 / 账户未开通」写在 body 里，丢了就没法排查
+        if resp.status_code >= 400:
+            return GateResult(
+                True, 0.0, "", 0.0,
+                f"门控返回 {resp.status_code}: {_extract_error_detail(resp, url)}", 0,
+            )
+
+        try:
+            body = resp.json()
+        except Exception as exc:
+            return GateResult(True, 0.0, "", 0.0, f"门控响应不是合法 JSON: {exc}", 0)
 
         try:
             probability = parse_gate_probability(body, self.question_name())
