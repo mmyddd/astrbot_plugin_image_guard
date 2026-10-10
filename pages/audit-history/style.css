@@ -608,6 +608,19 @@ svg { display: block; width: 100%; height: 100%; }
 .toggle-text span { color: var(--text-3); font-size: 11px; line-height: 1.55; }
 
 .rule-editor { display: grid; gap: 10px; }
+
+/* ── 门控面板 ───────────────────────────────────────────── */
+.gate-panel { display: grid; gap: 16px; margin-top: 16px; }
+.gate-panel[data-locked] { opacity: .5; }
+.gate-panel[data-locked] .input,
+.gate-panel[data-locked] .textarea { cursor: not-allowed; }
+.gate-rules { display: grid; gap: 14px; padding-top: 4px; border-top: 1px solid var(--line); }
+.gate-rules-hint { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.gate-test { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.gate-test-note { font-size: 13px; color: var(--text-2); }
+.gate-test-note[data-state="loading"] { color: var(--text-3); }
+.gate-test-note[data-state="success"] { color: var(--success); }
+.gate-test-note[data-state="error"] { color: var(--danger); }
 .rule-input-row { display: flex; gap: 8px; }
 .rule-input-row .input { flex: 1 1 auto; }
 .rule-tags { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; }

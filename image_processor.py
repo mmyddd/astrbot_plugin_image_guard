@@ -63,6 +63,53 @@ def compress_image_to_data_url(image_bytes: bytes, max_bytes: int) -> str:
     return compress_image_with_result(image_bytes, max_bytes).data_url
 
 
+GATE_ACCEPTED_MIME: Final = frozenset({"image/png", "image/jpeg", "image/webp"})
+"""SystemOne 门控只接受这三种静态格式，GIF 等其余格式需先转帧。"""
+
+MIME_BY_PIL_FORMAT: Final = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
+}
+"""PIL 格式名到门控可接受 MIME 的映射，未命中的格式需要转换。"""
+
+
+def detect_image_mime(image_bytes: bytes) -> str:
+    """按内容嗅探原始图片的 MIME 类型，识别不出时回退 JPEG。
+
+    不能只看文件后缀：QQ 等来源的图片经常带 .jpg 后缀却是 PNG 或 GIF 内容，
+    门控按后缀拼 MIME 会直接把请求拼错。
+    """
+    try:
+        raw = PillowImage.open(io.BytesIO(image_bytes))
+    except Exception:
+        return "image/jpeg"
+    mime = MIME_BY_PIL_FORMAT.get(str(raw.format or "").upper())
+    return mime or "image/jpeg"
+
+
+def to_gate_accepted_data_url(image_bytes: bytes) -> str:
+    """把任意图片编码成门控可接受的静态 data URL。
+
+    门控只吃 png/jpeg/webp。GIF 取第一帧转成 JPEG——动图的违规元素通常在
+    首帧就能看见，逐帧判定的成本远高于收益，不值得为它多花一次调用。
+    """
+    mime = detect_image_mime(image_bytes)
+    if mime in GATE_ACCEPTED_MIME:
+        return encode_image_to_data_url(image_bytes, mime)
+
+    try:
+        raw = PillowImage.open(io.BytesIO(image_bytes))
+        first_frame = raw.convert("RGB")
+    except Exception:
+        # 连 PIL 都解不开时按 JPEG 直送，让门控自己报错，比在这里静默丢图好
+        return encode_image_to_data_url(image_bytes, "image/jpeg")
+
+    buffer = io.BytesIO()
+    first_frame.save(buffer, format="JPEG", quality=90, optimize=True)
+    return encode_image_to_data_url(buffer.getvalue(), "image/jpeg")
+
+
 def compress_image_with_result(image_bytes: bytes, max_bytes: int) -> ImageCompressionResult:
     raw = PillowImage.open(io.BytesIO(image_bytes))
     if raw.format == "GIF":

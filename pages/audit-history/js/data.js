@@ -241,6 +241,9 @@
     },
     providersSave(providers) {
       return api.post('audit/providers/save', { providers: providers });
+    },
+    systemoneTest(payload) {
+      return api.post('audit/systemone/test', payload || {});
     }
   };
 
@@ -302,7 +305,8 @@
       const stats = state.runtimeStats || {};
       const num = key => Number(stats[key]) || 0;
       const auditTotal = num('audit_total');
-      const skipped = num('audit_skipped_cache') + num('audit_skipped_probability');
+      const gateSkipped = num('audit_skipped_gate');
+      const skipped = num('audit_skipped_cache') + num('audit_skipped_probability') + gateSkipped;
       const noRules = num('audit_skipped_no_rules');
       const failed = num('audit_failed');
       const safe = num('safe_total');
@@ -316,6 +320,9 @@
         skipped: skipped,
         skippedCache: num('audit_skipped_cache'),
         skippedProbability: num('audit_skipped_probability'),
+        gateSkipped: gateSkipped,
+        gateCalls: num('systemone_calls'),
+        gateFailed: num('systemone_failed'),
         noRules: noRules,
         failed: failed,
         safe: safe,

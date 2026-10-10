@@ -161,6 +161,7 @@
       setText('stat-audited-foot',
         '送审 ' + format.int(funnel.auditTotal) +
         ' · 跳过 ' + format.int(funnel.skipped) +
+        (funnel.gateSkipped ? ' · 门控放行 ' + format.int(funnel.gateSkipped) : '') +
         (funnel.noRules ? ' · 无规则 ' + format.int(funnel.noRules) : ''));
       const skipRate = funnel.audited > 0 ? Math.round(funnel.skipped / funnel.audited * 100) : 0;
       setBar('stat-audited-bar', skipRate);
@@ -281,7 +282,10 @@
       ['抽查概率', format.percent(Number(config.check_probability || 0) * 100)],
       ['自动处置', (config.enable_recall ? '撤回消息 · ' : '不撤回 · ') + format.duration(config.ban_duration)],
       ['战报转发', config.report_enabled ? '已配置接收目标' : '未配置'],
-      ['审核缓存', config.cache_enabled ? '已启用' : '已关闭']
+      ['审核缓存', config.cache_enabled ? '已启用' : '已关闭'],
+      ['门控降本', config.gate_enabled
+        ? '已启用 · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)
+        : '已关闭']
     ];
     container.innerHTML = '<div class="snapshot-list">' + rows.map(row =>
       '<div class="snapshot-row"><span>' + esc(row[0]) + '</span><strong>' + esc(row[1]) + '</strong></div>'
@@ -325,7 +329,8 @@
         : []),
       { text: format.int(config.rule_count || 0) + ' 条规则', tone: 'accent', title: '敏感文字与违规画面描述总量' },
       { text: (config.provider_count || 0) + ' 个供应商', tone: config.provider_count ? 'muted' : 'warn', title: (config.provider_names || []).join('、') || '未配置供应商' },
-      { text: config.cache_enabled ? '缓存已启用' : '缓存已关闭', tone: config.cache_enabled ? 'muted' : 'warn', title: '审核缓存状态' }
+      { text: config.cache_enabled ? '缓存已启用' : '缓存已关闭', tone: config.cache_enabled ? 'muted' : 'warn', title: '审核缓存状态' },
+      { text: config.gate_enabled ? '门控已启用' : '门控已关闭', tone: config.gate_enabled ? 'muted' : 'off', title: config.gate_enabled ? ('门控模型 ' + (config.gate_model || '') + ' · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)) : '未开启低成本门控' }
     ];
     container.innerHTML = pills.map(pill =>
       '<span class="meta-pill" data-tone="' + pill.tone + '" title="' + esc(pill.title) + '">' + esc(pill.text) + '</span>'

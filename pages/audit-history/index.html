@@ -281,6 +281,7 @@
         <nav class="tabs" id="settings-tabs" aria-label="配置分组">
           <button class="tab-btn" type="button" data-section="rules" data-section-tab>审查规则</button>
           <button class="tab-btn" type="button" data-section="providers" data-section-tab>LLM 供应商</button>
+          <button class="tab-btn" type="button" data-section="gate" data-section-tab>门控降本</button>
           <button class="tab-btn" type="button" data-section="scope" data-section-tab>范围与处置</button>
           <button class="tab-btn" type="button" data-section="media" data-section-tab>图片与调试</button>
           <button class="tab-btn" type="button" data-section="cache" data-section-tab>缓存与存储</button>
@@ -540,6 +541,120 @@
                 <div class="danger-zone-actions">
                   <button class="btn btn-sm btn-ghost" type="button" id="cache-clear">清空审核缓存</button>
                   <button class="btn btn-sm btn-danger" type="button" id="storage-prune">清理孤立图片</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 门控降本 -->
+          <section class="card" id="section-gate" data-section-panel="gate" aria-labelledby="gate-title">
+            <header class="card-head">
+              <div>
+                <h2 class="card-title" id="gate-title">门控降本</h2>
+                <p class="card-sub">先用低成本判定模型筛一遍，明显安全的图不再调用视觉大模型。门控结论不传给大模型，也不用于判罚。</p>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="toggle-list">
+                <label class="toggle" for="cfg-systemone_enabled">
+                  <input type="checkbox" id="cfg-systemone_enabled">
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">
+                    <strong>启用 SystemOne 门控</strong>
+                    <span>关闭时插件行为与未接入门控时完全一致，不产生任何额外请求</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="gate-panel" id="gate-panel">
+                <div class="inline-grid">
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_base_url">网关地址</label>
+                      <span class="field-hint">留空使用 OpenRouter 默认地址</span>
+                    </div>
+                    <input class="input" type="text" id="cfg-systemone_base_url" placeholder="https://openrouter.ai/api" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_endpoint_path">端点路径</label>
+                      <span class="field-hint">留空则按网关地址自动判断</span>
+                    </div>
+                    <input class="input" type="text" id="cfg-systemone_endpoint_path" placeholder="/alpha/decisions" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_api_key">门控 API Key</label>
+                      <span class="field-hint">与视觉大模型分开计费</span>
+                    </div>
+                    <input class="input" type="password" id="cfg-systemone_api_key" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_model">门控模型</label>
+                      <span class="field-hint">需支持图文联合判定</span>
+                    </div>
+                    <input class="input" type="text" id="cfg-systemone_model" placeholder="cloudflare/clef-flash" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_violation_threshold">违规概率阈值</label>
+                      <span class="field-hint">低于此值直接放行，高于才送审</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-systemone_violation_threshold" min="0.05" max="0.95" step="0.01" inputmode="decimal">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_timeout_seconds">请求超时（秒）</label>
+                      <span class="field-hint">超时按放行处理，不阻塞审核</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-systemone_timeout_seconds" min="3" max="120" step="1" inputmode="numeric">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_max_image_bytes">单图字节上限</label>
+                      <span class="field-hint">原始图超此值才走压缩链路</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-systemone_max_image_bytes" min="16384" max="4194304" step="16384" inputmode="numeric">
+                  </div>
+                </div>
+
+                <div class="field field-block">
+                  <div class="field-head">
+                    <label class="field-label" for="cfg-systemone_question">判定问题</label>
+                    <span class="field-hint">留空使用内置问句，门控只输出概率不生成文字</span>
+                  </div>
+                  <input class="input" type="text" id="cfg-systemone_question" spellcheck="false">
+                </div>
+
+                <div class="gate-test">
+                  <button class="btn btn-tonal" type="button" id="gate-test">测试门控连通性</button>
+                  <span class="gate-test-note" id="gate-test-note" role="status"></span>
+                </div>
+
+                <div class="gate-rules">
+                  <p class="gate-rules-hint">以下三项留空即继承「审查规则」中的同一配置。填写后仅门控生效——只有两边判据一致，门控放行才等价于大模型也会放行。</p>
+                  <div class="field field-block">
+                    <div class="field-head">
+                      <label class="field-label" for="rule-input-systemone_sensitive_texts">门控专用敏感文字（OCR）</label>
+                      <span class="field-hint">留空继承审查规则中的敏感文字</span>
+                    </div>
+                    <div class="rule-editor" id="editor-systemone_sensitive_texts" data-field="systemone_sensitive_texts"></div>
+                  </div>
+                  <div class="field field-block">
+                    <div class="field-head">
+                      <label class="field-label" for="rule-input-systemone_forbidden_descriptions">门控专用违规画面描述（语义）</label>
+                      <span class="field-hint">留空继承审查规则中的违规画面描述</span>
+                    </div>
+                    <div class="rule-editor" id="editor-systemone_forbidden_descriptions" data-field="systemone_forbidden_descriptions"></div>
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-systemone_vision_prompt">门控专用识图引导词</label>
+                      <span class="field-hint">留空继承审查规则中的自定义识图引导词</span>
+                    </div>
+                    <textarea class="textarea" id="cfg-systemone_vision_prompt" rows="3" spellcheck="false"></textarea>
+                  </div>
                 </div>
               </div>
             </div>

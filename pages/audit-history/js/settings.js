@@ -38,23 +38,62 @@
   const TEMPLATE_LABELS = {};
   TEMPLATES.forEach(item => { TEMPLATE_LABELS[item.key] = item.name; });
 
-  const RULE_FIELDS = ['sensitive_texts', 'forbidden_descriptions'];
+  const RULE_FIELDS = [
+    'sensitive_texts', 'forbidden_descriptions',
+    'systemone_sensitive_texts', 'systemone_forbidden_descriptions'
+  ];
 
   const NUMERIC_FIELDS = [
     'llm_max_tokens', 'llm_timeout_seconds', 'check_probability', 'ban_duration',
     'compressed_image_max_bytes', 'audit_history_max_records',
-    'audit_cache_threshold', 'audit_cache_max_entries'
+    'audit_cache_threshold', 'audit_cache_max_entries',
+    'systemone_violation_threshold', 'systemone_timeout_seconds',
+    'systemone_max_image_bytes'
   ];
 
   const TEXTAREA_FIELDS = ['cfg-group_scope', 'cfg-private_scope'];
   const CHECKBOX_FIELDS = [
     'cfg-enable_recall', 'cfg-keep_compressed_image_in_temp',
-    'cfg-debug_log_llm_response', 'cfg-audit_cache_enabled'
+    'cfg-debug_log_llm_response', 'cfg-audit_cache_enabled',
+    'cfg-systemone_enabled'
+  ];
+
+  // 门控关闭时这些字段不可编辑：只有打开开关后才能分别设置
+  const GATE_LOCKED_FIELDS = [
+    'cfg-systemone_base_url', 'cfg-systemone_endpoint_path',
+    'cfg-systemone_api_key', 'cfg-systemone_model',
+    'cfg-systemone_violation_threshold', 'cfg-systemone_timeout_seconds',
+    'cfg-systemone_max_image_bytes', 'cfg-systemone_question',
+    'cfg-systemone_vision_prompt',
+    'editor-systemone_sensitive_texts', 'editor-systemone_forbidden_descriptions'
   ];
 
   let baseline = '';
-  let rules = { sensitive_texts: [], forbidden_descriptions: [] };
+  let rules = {
+    sensitive_texts: [],
+    forbidden_descriptions: [],
+    systemone_sensitive_texts: [],
+    systemone_forbidden_descriptions: []
+  };
   let reportTargets = [];
+
+  /* 门控关闭时锁住覆盖项，避免误以为它们当前生效 */
+  function syncGateLock() {
+    const on = $('#cfg-systemone_enabled') ? $('#cfg-systemone_enabled').checked : false;
+    const panel = $('#gate-panel');
+    if (panel) {
+      if (on) panel.removeAttribute('data-locked');
+      else panel.setAttribute('data-locked', '1');
+    }
+    GATE_LOCKED_FIELDS.forEach(id => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.disabled = !on;
+      node.setAttribute('aria-disabled', on ? 'false' : 'true');
+    });
+    const test = $('#gate-test');
+    if (test) test.disabled = !on;
+  }
 
   /* ── 规则编辑器 ───────────────────────────────────────── */
   function mountRuleEditors() {
@@ -419,7 +458,9 @@
   function fillForm(config) {
     rules = {
       sensitive_texts: (config.sensitive_texts || []).slice(),
-      forbidden_descriptions: (config.forbidden_descriptions || []).slice()
+      forbidden_descriptions: (config.forbidden_descriptions || []).slice(),
+      systemone_sensitive_texts: (config.systemone_sensitive_texts || []).slice(),
+      systemone_forbidden_descriptions: (config.systemone_forbidden_descriptions || []).slice()
     };
     renderRules();
 
@@ -448,6 +489,18 @@
     $('#cfg-audit_cache_enabled').checked = truthy(config.audit_cache_enabled);
     $('#cfg-audit_cache_threshold').value = valueOr(config.audit_cache_threshold, '');
     $('#cfg-audit_cache_max_entries').value = valueOr(config.audit_cache_max_entries, '');
+
+    $('#cfg-systemone_base_url').value = config.systemone_base_url || '';
+    $('#cfg-systemone_endpoint_path').value = config.systemone_endpoint_path || '';
+    $('#cfg-systemone_api_key').value = config.systemone_api_key || '';
+    $('#cfg-systemone_model').value = config.systemone_model || '';
+    $('#cfg-systemone_violation_threshold').value = valueOr(config.systemone_violation_threshold, '');
+    $('#cfg-systemone_timeout_seconds').value = valueOr(config.systemone_timeout_seconds, '');
+    $('#cfg-systemone_max_image_bytes').value = valueOr(config.systemone_max_image_bytes, '');
+    $('#cfg-systemone_question').value = config.systemone_question || '';
+    $('#cfg-systemone_vision_prompt').value = config.systemone_vision_prompt || '';
+    $('#cfg-systemone_enabled').checked = truthy(config.systemone_enabled);
+    syncGateLock();
 
     reportTargets = (config.group_report_targets || [])
       .filter(item => item && typeof item === 'object')
@@ -489,6 +542,29 @@
     return Number.isNaN(parsed) ? fallback : parsed;
   }
 
+  /* 门控连通性测试：发一次真实判定，展示概率与耗时 */
+  async function testSystemone() {
+    const button = $('#gate-test');
+    const note = $('#gate-test-note');
+    if (!button || !note) return;
+    button.classList.add('is-busy');
+    button.disabled = true;
+    note.textContent = '正在测试…';
+    note.dataset.state = 'loading';
+    show(note, true);
+    try {
+      const result = await IG.api.systemoneTest({});
+      note.textContent = result.message || (result.ok ? '调用成功' : '调用失败');
+      note.dataset.state = result.ok ? 'success' : 'error';
+    } catch (error) {
+      note.textContent = '测试失败：' + (error && error.message ? error.message : error);
+      note.dataset.state = 'error';
+    } finally {
+      button.classList.remove('is-busy');
+      syncGateLock();
+    }
+  }
+
   function collectPatch(options) {
     const opts = options || {};
     const patch = {
@@ -517,7 +593,19 @@
       debug_log_llm_response: $('#cfg-debug_log_llm_response').checked,
       audit_cache_enabled: $('#cfg-audit_cache_enabled').checked,
       audit_cache_threshold: intOr($('#cfg-audit_cache_threshold').value, 3),
-      audit_cache_max_entries: intOr($('#cfg-audit_cache_max_entries').value, 10000)
+      audit_cache_max_entries: intOr($('#cfg-audit_cache_max_entries').value, 10000),
+      systemone_enabled: $('#cfg-systemone_enabled').checked,
+      systemone_base_url: $('#cfg-systemone_base_url').value.trim(),
+      systemone_endpoint_path: $('#cfg-systemone_endpoint_path').value.trim(),
+      systemone_api_key: $('#cfg-systemone_api_key').value,
+      systemone_model: $('#cfg-systemone_model').value.trim(),
+      systemone_violation_threshold: floatOr($('#cfg-systemone_violation_threshold').value, 0.3),
+      systemone_timeout_seconds: floatOr($('#cfg-systemone_timeout_seconds').value, 15),
+      systemone_max_image_bytes: intOr($('#cfg-systemone_max_image_bytes').value, 300000),
+      systemone_question: $('#cfg-systemone_question').value.trim(),
+      systemone_vision_prompt: $('#cfg-systemone_vision_prompt').value,
+      systemone_sensitive_texts: rules.systemone_sensitive_texts.slice(),
+      systemone_forbidden_descriptions: rules.systemone_forbidden_descriptions.slice()
     };
     if (opts.includeProviders !== false) {
       // __index 提示后端：掩码 Key 应该回填哪一条已保存的明文（重命名/复制后依然成立）
@@ -780,6 +868,17 @@
 
     const whitelistInput = $('#cfg-audit_whitelist');
     if (whitelistInput) whitelistInput.addEventListener('input', updateWhitelistHint);
+
+    // 门控开关驱动覆盖项的可编辑状态
+    const gateToggle = $('#cfg-systemone_enabled');
+    if (gateToggle) {
+      gateToggle.addEventListener('change', () => {
+        syncGateLock();
+        markDirty();
+      });
+    }
+    const gateTest = $('#gate-test');
+    if (gateTest) gateTest.addEventListener('click', testSystemone);
 
     const form = $('#section-rules').closest('.settings-main');
     if (form) {

@@ -236,5 +236,82 @@
     "type": "int",
     "default": 10000,
     "hint": "设为0表示不设上限（不推荐）；日常使用10000已足够"
+  },
+  "systemone_enabled": {
+    "description": "启用 SystemOne 门控。开启后每张图片先经低成本判定模型筛一遍，违规概率低于阈值直接放行不调用视觉大模型，高于阈值才送审。门控结论不会传给大模型，也不用于判罚，仅用于节省开销。",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时插件行为与未接入门控时完全一致"
+  },
+  "systemone_base_url": {
+    "description": "门控网关地址。留空使用默认 OpenRouter 地址。",
+    "type": "string",
+    "default": "https://openrouter.ai/api",
+    "hint": "一般无需修改；自建或代理服务填自己的根地址"
+  },
+  "systemone_endpoint_path": {
+    "description": "门控端点路径。留空则按网关地址自动判断（/api 结尾用 /alpha/decisions，/v1 结尾用 /decisions）。",
+    "type": "string",
+    "default": "",
+    "hint": "仅在自动判断不符合实际时手动填写"
+  },
+  "systemone_api_key": {
+    "description": "门控 API Key。独立于 LLM 供应商的 Key，可与视觉大模型用不同账号分别计费。",
+    "type": "string",
+    "default": ""
+  },
+  "systemone_model": {
+    "description": "门控模型名。",
+    "type": "string",
+    "default": "cloudflare/clef-flash",
+    "hint": "需要支持图文联合判定的决策模型"
+  },
+  "systemone_violation_threshold": {
+    "description": "违规概率阈值。判定模型给出的违规概率低于此值直接放行，高于或等于此值才送视觉大模型复核。",
+    "type": "float",
+    "default": 0.3,
+    "hint": "调高更省钱但可能漏放；建议0.2-0.4，默认0.3"
+  },
+  "systemone_timeout_seconds": {
+    "description": "门控单次请求超时（秒）。超时按放行处理，不会阻塞审核。",
+    "type": "float",
+    "default": 15.0,
+    "hint": "门控应远快于视觉大模型，建议不要超过30秒"
+  },
+  "systemone_max_image_bytes": {
+    "description": "门控单图字节上限。原始图片在此范围内直接送审不压缩，超过才走压缩链路（避免超出模型 token 窗口被拒）。",
+    "type": "int",
+    "default": 300000,
+    "hint": "文档建议每张控制在300KB内；调大会更费token但保留更多细节"
+  },
+  "systemone_question": {
+    "description": "门控判定问题。留空使用内置问句。",
+    "type": "string",
+    "default": "Does the image contain any item from the violation list above?",
+    "hint": "门控只输出概率不生成文字，问题需可明确判定"
+  },
+  "systemone_sensitive_texts": {
+    "description": "门控专用敏感文字（OCR）。留空则继承审查规则中的同一配置。",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    },
+    "hint": "留空表示与视觉大模型共用同一份规则；填写后仅门控生效"
+  },
+  "systemone_forbidden_descriptions": {
+    "description": "门控专用违规画面描述（语义）。留空则继承审查规则中的同一配置。",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    },
+    "hint": "留空表示与视觉大模型共用同一份规则；填写后仅门控生效"
+  },
+  "systemone_vision_prompt": {
+    "description": "门控专用识图引导词。留空则继承审查规则中的自定义识图引导词。",
+    "type": "string",
+    "default": "",
+    "hint": "留空表示与视觉大模型共用同一份引导词"
   }
 }

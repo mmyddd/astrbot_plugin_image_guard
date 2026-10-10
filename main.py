@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import httpx
 import json
 import random
@@ -7,7 +8,10 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+
+from PIL import Image as PillowImage
 from .cache import ImageAuditCache
+from .systemone_client import SystemOneGate
 from .image_processor import (
     compress_image_with_result,
     _format_compression_result,
@@ -40,6 +44,14 @@ SECRET_MASK = "********"
 SECRET_FIELDS = ("api_key",)
 """llm_providers 条目中需要掩码的字段。"""
 
+TOP_LEVEL_SECRET_FIELDS = ("systemone_api_key",)
+"""顶层配置中需要掩码的字段。
+
+与 SECRET_FIELDS 分开是因为两者命名空间不同：前者是供应商条目内的
+字段名，后者是插件配置顶层的键名。混用会让掩码回填判断永远为假，
+页面保存时把八颗星当成明文写回配置，Key 随之静默失效。
+"""
+
 PENDING_TTL_SECONDS = 900
 """单条“处理中”任务的最大存活时间，超时视为异常残留并被清理。"""
 PENDING_MAX_ITEMS = 32
@@ -52,6 +64,9 @@ AUDIT_STAT_KEYS = (
     "audit_skipped_cache",
     "audit_skipped_probability",
     "audit_skipped_no_rules",
+    "audit_skipped_gate",
+    "systemone_calls",
+    "systemone_failed",
     "audit_failed",
     "safe_total",
     "safe_discarded",
@@ -70,6 +85,8 @@ _EDITABLE_LIST_FIELDS = (
     "audit_whitelist",
     "sensitive_texts",
     "forbidden_descriptions",
+    "systemone_sensitive_texts",
+    "systemone_forbidden_descriptions",
 )
 
 
@@ -164,9 +181,26 @@ def _hit_whitelist(user_id: str, raw_whitelist: object) -> bool:
         if value and value == target:
             return True
     return False
-_EDITABLE_TEXT_FIELDS = ("custom_vision_prompt", "reasoning_effort", "report_target_id")
+_EDITABLE_TEXT_FIELDS = (
+    "custom_vision_prompt",
+    "reasoning_effort",
+    "report_target_id",
+    "systemone_base_url",
+    "systemone_endpoint_path",
+    "systemone_model",
+    "systemone_question",
+    "systemone_vision_prompt",
+    # systemone_api_key 也走这里，保存前必须先做掩码回填（见 _api_audit_config_update）
+    "systemone_api_key",
+)
 _EDITABLE_DICT_LIST_FIELDS = ("group_report_targets",)
-_EDITABLE_BOOL_FIELDS = ("enable_recall", "audit_cache_enabled", "keep_compressed_image_in_temp", "debug_log_llm_response")
+_EDITABLE_BOOL_FIELDS = (
+    "enable_recall",
+    "audit_cache_enabled",
+    "keep_compressed_image_in_temp",
+    "debug_log_llm_response",
+    "systemone_enabled",
+)
 _EDITABLE_INT_FIELDS = (
     "llm_max_tokens",
     "compressed_image_max_bytes",
@@ -174,8 +208,14 @@ _EDITABLE_INT_FIELDS = (
     "audit_history_max_records",
     "audit_cache_threshold",
     "audit_cache_max_entries",
+    "systemone_max_image_bytes",
 )
-_EDITABLE_FLOAT_FIELDS = ("llm_timeout_seconds", "check_probability")
+_EDITABLE_FLOAT_FIELDS = (
+    "llm_timeout_seconds",
+    "check_probability",
+    "systemone_violation_threshold",
+    "systemone_timeout_seconds",
+)
 
 
 def _as_list(raw: object) -> list:
@@ -307,6 +347,13 @@ def _parse_audit_tags(response_text: str) -> list[str]:
     return _normalize_audit_tags(parsed)
 
 
+def _make_probe_image() -> bytes:
+    """生成一张纯色测试图，供门控连通性测试在没有真实图片时使用。"""
+    buffer = io.BytesIO()
+    PillowImage.new("RGB", (64, 64), (120, 160, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 @register("image_guard", "YEZI", "图片内容审查卫士", "1.12.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
@@ -381,6 +428,12 @@ class ImageGuard(Star):
             self._api_audit_pending,
             ["GET"],
             "获取正在处理的审核任务",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/systemone/test",
+            self._api_audit_systemone_test,
+            ["POST"],
+            "测试 SystemOne 门控连通性",
         )
         context.register_web_api(
             "/astrbot_plugin_image_guard/audit/storage/prune",
@@ -619,13 +672,16 @@ class ImageGuard(Star):
         if not image_urls: return
 
         # === 5. 审核缓存检查（重复多次的图片跳过审核） ===
+        # image_paths 与 image_urls 始终保持同序同长度：判罚与持久化用的是
+        # 原始文件路径，必须和实际送审的那张图对得上，否则会撤回头图、存错证据。
         cache_enabled = self.config.get("audit_cache_enabled", True)
         if cache_enabled:
             await self._ensure_audit_cache_loaded()
             fingerprints = [ImageAuditCache.compute_fingerprint(u) for u in image_urls]
             sending_urls: list[str] = []
+            sending_paths: list[Path] = []
             sending_fingerprints: list[str] = []
-            for url, fp in zip(image_urls, fingerprints):
+            for path, url, fp in zip(image_paths, image_urls, fingerprints):
                 if self._audit_cache.should_skip(fp):
                     logger.info(
                         f"[ImageGuard] 图片指纹 {fp[:12]} "
@@ -633,6 +689,7 @@ class ImageGuard(Star):
                     )
                 else:
                     sending_urls.append(url)
+                    sending_paths.append(path)
                     sending_fingerprints.append(fp)
             if not sending_urls:
                 logger.info("[ImageGuard] 所有图片均已多次审核，跳过本次审核")
@@ -643,14 +700,16 @@ class ImageGuard(Star):
             dedup = dict.fromkeys(sending_fingerprints)  # key 按首次出现顺序排列
             if len(dedup) != len(sending_fingerprints):
                 before = len(sending_fingerprints)
-                url_by_fp = dict(zip(sending_fingerprints, sending_urls))
+                url_by_fp = dict(zip(sending_fingerprints, zip(sending_urls, sending_paths)))
                 sending_fingerprints = list(dedup)
-                sending_urls = [url_by_fp[fp] for fp in sending_fingerprints]
+                sending_urls = [url_by_fp[fp][0] for fp in sending_fingerprints]
+                sending_paths = [url_by_fp[fp][1] for fp in sending_fingerprints]
                 logger.info(
                     f"[ImageGuard] 去重后剩余 {len(sending_urls)}/{before} 张不重复图片"
                 )
 
             image_urls = sending_urls
+            image_paths = sending_paths
         else:
             sending_fingerprints = []
 
@@ -669,7 +728,19 @@ class ImageGuard(Star):
             await self._bump_audit_stats(audit_skipped_no_rules=1)
             return
 
-        # === 8. 审核逻辑 ===
+        # === 8. SystemOne 门控（可选，低成本前置筛选） ===
+        # 门控只回答「哪些图值得送 LLM 复核」，结论不进提示词、不进历史记录。
+        # 未启用 / 配置不全 / 调用失败时一律原样放行，保证审核链路不依赖它。
+        image_paths, image_urls, gate_dropped = await self._systemone_filter_images(
+            image_paths, image_urls
+        )
+        if gate_dropped:
+            await self._bump_audit_stats(audit_skipped_gate=gate_dropped)
+        if not image_urls:
+            logger.info("[ImageGuard] 门控已放行全部图片，跳过视觉大模型")
+            return
+
+        # === 9. 审核逻辑 ===
         custom_instruction = self.config.get("custom_vision_prompt", "")
         prompt = (
             "你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n"
@@ -757,6 +828,81 @@ class ImageGuard(Star):
             await self._bump_audit_stats(audit_failed=1)
         finally:
             self._pending_finish(pending_id)
+
+    # ── SystemOne 门控 ───────────────────────────────────────
+
+    async def _systemone_filter_images(
+        self,
+        image_paths: list[Path],
+        image_urls: list[str],
+    ) -> tuple[list[Path], list[str], int]:
+        """用低成本判定模型筛掉明显安全的图片，剩下的送去视觉大模型。
+
+        门控拿到的概率只用于本地分流：它不会进入后续提示词，历史记录里也
+        不会留下痕迹，视觉大模型看到的规则与问题同门控关闭时完全一致。
+
+        任何异常都按「放行」处理——门控是省钱手段，不是安全闸门，不能因为
+        它故障就让审核链路跟着失效。
+
+        Args:
+            image_paths: 原始本地文件路径，与 image_urls 一一对应。
+            image_urls: 已压缩的 data URL。
+
+        Returns:
+            三元组（保留的路径、保留的 URL、被筛掉的张数）。未启用时原样
+            返回入参，被筛掉计数为 0。
+        """
+        keep_all = (image_paths, image_urls, 0)
+        try:
+            gate = SystemOneGate(self.config, self._http_client)
+            if not gate.enabled:
+                return keep_all
+            if not gate.api_key():
+                logger.warning("[ImageGuard] 门控已开启但未填写 API Key，本次跳过门控")
+                return keep_all
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 门控初始化失败，跳过门控: {e}")
+            return keep_all
+
+        text = gate.build_state_text()
+        kept: list[tuple[Path, str]] = []
+        dropped = 0
+
+        for index, (path, url) in enumerate(zip(image_paths, image_urls), start=1):
+            try:
+                result = await gate.check_image(text, path)
+            except Exception as e:
+                # 单张异常不影响整批：这张继续送审，不丢图
+                logger.warning(f"[ImageGuard] 门控第{index}张判定异常，保留送审: {e}")
+                kept.append((path, url))
+                continue
+
+            await self._bump_audit_stats(systemone_calls=1)
+            if result.error:
+                await self._bump_audit_stats(systemone_failed=1)
+                logger.warning(f"[ImageGuard] 门控第{index}张判定失败，按送审处理: {result.error}")
+                kept.append((path, url))
+                continue
+
+            detail = f"第{index}张 概率={result.probability:.2f}"
+            if result.provider:
+                detail += f" 上游={result.provider}"
+            if result.input_tokens:
+                detail += f" tokens={result.input_tokens}"
+            if result.passed:
+                logger.info(f"[ImageGuard] 门控判定需复核，送视觉大模型 {detail}")
+                kept.append((path, url))
+            else:
+                # 筛掉的图不写审核缓存：漏网的图下次仍会被重新判定
+                logger.info(f"[ImageGuard] 门控判定安全，直接放行不送审 {detail}")
+                dropped += 1
+
+        if dropped:
+            logger.info(
+                f"[ImageGuard] 门控筛掉 {dropped}/{len(image_paths)} 张，"
+                f"剩余 {len(kept)} 张送视觉大模型"
+            )
+        return [item[0] for item in kept], [item[1] for item in kept], dropped
 
     # ── 多供应商调用核心 ──────────────────────────────────────
 
@@ -1257,6 +1403,11 @@ class ImageGuard(Star):
             "enable_recall": _as_bool(self.config.get("enable_recall", True)),
             "ban_duration": _as_int(self.config.get("ban_duration", 86400), 86400),
             "cache_enabled": _as_bool(self.config.get("audit_cache_enabled", True)),
+            "gate_enabled": _as_bool(self.config.get("systemone_enabled", False)),
+            "gate_threshold": _as_float(
+                self.config.get("systemone_violation_threshold", 0.3), 0.3
+            ),
+            "gate_model": str(self.config.get("systemone_model", "") or "cloudflare/clef-flash"),
             "skip_banned": _as_bool(self.config.get("skip_audit_for_banned", False)),
             "report_enabled": bool(str(self.config.get("report_target_id", "")).strip())
             or bool(_as_list(self.config.get("group_report_targets", []))),
@@ -1304,6 +1455,11 @@ class ImageGuard(Star):
         except Exception:
             raw = dict(self.config)
         raw["llm_providers"] = _mask_providers(_sanitize_providers(raw.get("llm_providers", [])))
+        # 门控 Key 同样不返回明文，页面只拿到掩码值
+        gate_key = str(raw.get("systemone_api_key", "") or "")
+        if gate_key:
+            raw["systemone_api_key"] = _mask_secret(gate_key)
+            raw["systemone_api_key_masked"] = True
         return raw
 
     async def _api_audit_config_update(self):
@@ -1324,7 +1480,12 @@ class ImageGuard(Star):
 
         for field in _EDITABLE_TEXT_FIELDS:
             if field in payload:
-                config_obj[field] = str(payload[field] or "").strip()
+                value = str(payload[field] or "").strip()
+                # 页面回传的是掩码说明这项没改：沿用已保存的明文，
+                # 否则会把掩码当明文写回配置，Key 直接失效
+                if field in TOP_LEVEL_SECRET_FIELDS and SECRET_MASK in value:
+                    value = str(config_obj.get(field) or "").strip()
+                config_obj[field] = value
                 updated.append(field)
 
         for field in _EDITABLE_DICT_LIST_FIELDS:
@@ -1431,6 +1592,61 @@ class ImageGuard(Star):
             if entry.get("name") == name:
                 return entry
         return None
+
+    async def _api_audit_systemone_test(self):
+        """对门控发一次真实判定请求，验证地址、Key、模型与阈值是否可用。
+
+        页面可直接传一张本地图片做实测；不传时用一张内置的纯色测试图，
+        只验证链路通不通，概率本身没有参考意义。
+        """
+        from quart import request
+
+        payload = await request.get_json(silent=True) or {}
+        started = time.time()
+        try:
+            gate = SystemOneGate(self.config, self._http_client)
+            if not gate.api_key():
+                return {"ok": False, "message": "缺少门控 API Key"}
+            if not _as_bool(self.config.get("systemone_enabled", False)):
+                return {"ok": False, "message": "门控未开启，请先在配置中心打开开关"}
+
+            test_path = str(payload.get("path") or "").strip()
+            if test_path:
+                path = Path(test_path)
+            else:
+                path = Path(_resolve_compressed_image_temp_dir(None)) / "gate_probe.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(_make_probe_image())
+
+            result = await gate.check_image(gate.build_state_text(), path)
+            elapsed_ms = int((time.time() - started) * 1000)
+            if result.error:
+                return {
+                    "ok": False,
+                    "message": f"调用失败：{result.error}",
+                    "elapsed_ms": elapsed_ms,
+                    "url": gate.build_url(),
+                    "model": gate.model(),
+                }
+            return {
+                "ok": True,
+                "message": (
+                    f"门控可用，违规概率 {result.probability:.2f}"
+                    f"（阈值 {gate.threshold():.2f}，判定为"
+                    f"{'需复核' if result.passed else '直接放行'}）"
+                ),
+                "probability": result.probability,
+                "threshold": gate.threshold(),
+                "passed": result.passed,
+                "provider": result.provider,
+                "cost": result.cost,
+                "input_tokens": result.input_tokens,
+                "elapsed_ms": elapsed_ms,
+                "url": gate.build_url(),
+                "model": gate.model(),
+            }
+        except Exception as e:
+            return {"ok": False, "message": f"测试失败：{e}"}
 
     async def _api_audit_providers_save(self):
         """整体替换供应商列表（页面弹窗里增删改排序后的结果）。"""
