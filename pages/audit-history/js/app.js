@@ -14,7 +14,7 @@
   const toast = IG.toast;
 
   const VIEWS = ['overview', 'records', 'settings'];
-  const SECTIONS = ['rules', 'providers', 'scope', 'media', 'cache'];
+  const SECTIONS = ['rules', 'providers', 'gate', 'scope', 'media', 'cache'];
 
   let statusTimer = 0;
   let lastHash = '';
