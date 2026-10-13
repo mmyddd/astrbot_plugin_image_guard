@@ -467,6 +467,12 @@ class ImageGuard(Star):
             "导出数据集",
         )
         context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/dataset/delete",
+            self._api_audit_dataset_delete,
+            ["POST", "DELETE"],
+            "删除单条数据集记录",
+        )
+        context.register_web_api(
             "/astrbot_plugin_image_guard/audit/dataset/clear",
             self._api_audit_dataset_clear,
             ["POST", "DELETE"],
@@ -1857,6 +1863,7 @@ class ImageGuard(Star):
                     "prompt": str(request.get("prompt") or "")[:600],
                     "prompt_bytes": len(str(request.get("prompt") or "").encode("utf-8")),
                     "images": images,
+                    "image_count": len(images),
                     "status": response.get("status", "pending"),
                     "text": str(response.get("text") or "")[:600],
                     "tags": response.get("tags") or [],
@@ -1888,6 +1895,19 @@ class ImageGuard(Star):
         result = self._dataset.export(limit=max(0, limit))
         if not result.get("ok"):
             return {"ok": False, "message": result.get("message", "导出失败")}, 400
+        return result
+
+    async def _api_audit_dataset_delete(self):
+        """删除单条留存样本（请求侧、响应侧与图片一并清理）。"""
+        from quart import request
+
+        payload = await request.get_json(silent=True) or {}
+        sample_id = str(payload.get("id") or "").strip()
+        if not sample_id:
+            return {"deleted": False, "message": "缺少样本 id"}, 400
+        result = self._dataset.delete_sample(sample_id)
+        if not result.get("deleted"):
+            return result, 404
         return result
 
     async def _api_audit_dataset_clear(self):

@@ -251,6 +251,9 @@
     datasetExport(limit) {
       return api.post('audit/dataset/export', { limit: limit || 0 });
     },
+    datasetDelete(id) {
+      return api.post('audit/dataset/delete', { id: id });
+    },
     datasetClear() {
       return api.post('audit/dataset/clear', {});
     }

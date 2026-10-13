@@ -151,6 +151,9 @@ _MIME_EXT = {
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
+_SAMPLE_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+"""样本 id 格式：YYYYmmdd-HHMMSS-随机十六进制。用于校验删除请求，防止路径穿越。"""
+
 
 def _as_bool(raw: object) -> bool:
     """与 main.py 同语义的宽松布尔解析（配置可能来自 JSON 或页面回传）。"""
@@ -855,6 +858,79 @@ class DatasetRecorder:
                     "assistant_tag": "gpt",
                 },
             }
+        }
+
+    # ── 删除单条 ──────────────────────────────────────────────
+
+    def _drop_lines(self, path: Path, sample_id: str) -> bool:
+        """删除 JSONL 中 id 匹配的行，返回是否真的删掉了内容。
+
+        流式重写而不是全量读进内存：samples.jsonl 内联着 base64，几千条能到 GB 级。
+        id 里带 "-"，而 base64 字母表不含 "-"，所以先用子串筛掉绝大多数行再做精确
+        比对——直接对每行做 json.loads 在 GB 级文件上会慢到不可接受。
+        """
+        if not path.exists():
+            return False
+        temp = path.with_name(path.name + ".tmp")
+        removed = False
+        try:
+            with path.open("r", encoding="utf-8") as source, temp.open(
+                "w", encoding="utf-8"
+            ) as target:
+                for line in source:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if sample_id in stripped:
+                        try:
+                            parsed = json.loads(stripped)
+                        except (ValueError, TypeError):
+                            parsed = None
+                        if isinstance(parsed, dict) and str(parsed.get("id")) == sample_id:
+                            removed = True
+                            continue
+                    target.write(stripped + "\n")
+            os.replace(temp, path)  # 原子替换，中途失败不会留下半截文件
+        except OSError as error:
+            logger.warning(f"[ImageGuard] 删除数据集记录失败 {path}: {error}")
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return removed
+
+    def delete_sample(self, sample_id: str) -> dict:
+        """删除单条留存样本：请求侧、响应侧与图片一起清掉。
+
+        同步执行而不丢进线程池：事件循环单线程反而保证了删除期间不会插入新的
+        追加写入，避免"重写用旧快照覆盖掉刚写进去的样本"。
+        """
+        target = str(sample_id or "").strip()
+        if not _SAMPLE_ID_RE.match(target):
+            # 样本 id 直接参与拼接图片目录，必须先卡格式，否则可以借 ../ 越出目录
+            return {"deleted": False, "message": "样本 id 格式不合法"}
+
+        removed_sample = self._drop_lines(self.samples_path, target)
+        removed_response = self._drop_lines(self.responses_path, target)
+
+        images_removed = 0
+        sample_dir = self.images_dir / target
+        try:
+            if sample_dir.is_dir():
+                images_removed = sum(1 for item in sample_dir.iterdir() if item.is_file())
+                shutil.rmtree(sample_dir)
+        except OSError as error:
+            logger.warning(f"[ImageGuard] 删除样本图片失败 {sample_dir}: {error}")
+
+        deleted = bool(removed_sample or removed_response or images_removed)
+        if deleted:
+            # 腾出了名额：达到条数上限而暂停的留存可以继续
+            self._limit_hit = False
+        return {
+            "deleted": deleted,
+            "images_removed": images_removed,
+            "message": "已删除" if deleted else "未找到该样本",
         }
 
     # ── 清理 ──────────────────────────────────────────────────

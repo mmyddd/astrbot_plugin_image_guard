@@ -695,6 +695,8 @@ svg { display: block; width: 100%; height: 100%; }
 .dataset-list { display: grid; gap: 10px; }
 .dataset-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--card-sunken); display: grid; gap: 8px; }
 .dataset-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dataset-card-drop { width: 28px; height: 28px; margin-left: auto; padding: 6px; border-radius: 8px; }
+.dataset-card-drop:hover { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); }
 .dataset-card-head strong { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dataset-card-time { color: var(--text-3); font-size: 11px; }
 .dataset-prompt {

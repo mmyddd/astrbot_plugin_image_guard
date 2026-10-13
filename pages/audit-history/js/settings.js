@@ -939,6 +939,10 @@
         '<span class="badge ' + labelTone + '">' + esc(labelText) + '</span>' +
         '<strong>' + esc(sample.id || '') + '</strong>' +
         '<span class="dataset-card-time">' + esc(format.fullTime(sample.created_at)) + '</span>' +
+        '<button class="icon-btn dataset-card-drop" type="button" data-dataset-drop="' + esc(sample.id || '') +
+        '" data-drop-label="' + esc(labelText) + '" aria-label="删除记录 ' + esc(sample.id || '') + '" title="删除这条记录">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M5 7h14M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button>' +
         '</div>' +
         '<pre class="dataset-prompt">' + esc(sample.prompt || '（无提示词）') + '</pre>' +
         '<div class="dataset-card-meta">' +
@@ -949,6 +953,11 @@
         '</div>' + tags +
         '</article>';
     }).join('');
+
+    $$('[data-dataset-drop]', list).forEach(button => {
+      button.addEventListener('click', () => deleteDatasetSample(
+        button.dataset.datasetDrop, button.dataset.dropLabel));
+    });
   }
 
   async function loadDataset() {
@@ -1002,6 +1011,23 @@
       toast('导出失败：' + message, 'error');
     } finally {
       if (button) button.classList.remove('is-busy');
+    }
+  }
+
+  async function deleteDatasetSample(id, label) {
+    const ok = await IG.confirm({
+      title: '删除数据集记录',
+      message: '将删除样本 ' + (id || '') + (label ? '（' + label + '）' : '') +
+        ' 的图片、提示词与模型返回，此操作不可撤销；已导出的产物不受影响。',
+      confirmText: '删除'
+    });
+    if (!ok) return;
+    try {
+      const result = await IG.api.datasetDelete(id);
+      toast('已删除该记录' + (result && result.images_removed ? '（含 ' + format.int(result.images_removed) + ' 张图片）' : ''), 'success');
+      await loadDataset();
+    } catch (error) {
+      toast('删除失败：' + (error && error.message ? error.message : error), 'error');
     }
   }
 
