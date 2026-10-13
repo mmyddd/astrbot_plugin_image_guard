@@ -43,15 +43,16 @@
       "recorded_at": "...", "raw": null
     }
 
-导出（`export`）只取成功且返回非空的样本，写成一行一条的多模态 sharegpt：
-`conversations` 里 human 放固定指令加 `<image>` 占位、gpt 放 `REASON/RESULT/TAGS`
-三行判定，`system` 放完整审核规则，`images` 列放图片相对路径。图片同时复制进
-导出目录的 images/，这样导出产物可以整体搬走、不依赖留存目录还在不在。
+导出（`export`）只取成功且返回非空的样本，写成一行一条的多模态 messages：
+system 放完整审核规则、user 放固定指令加 `<image>` 占位、assistant 放
+`REASON/RESULT/TAGS` 三行判定，`images` 列放图片相对路径。图片同时复制进导出
+目录的 images/，这样导出产物可以整体搬走、不依赖留存目录还在不在。
 
-没有采用 OpenAI 的 messages/image_url 结构：那是接口请求体而非训练格式，
+没有把图片塞进 content 分块的 image_url：那是接口请求体而非训练格式，
 LLaMA-Factory 的 mm_plugin 里根本没有 image_url 这个字面量，图片只能走独立的
-images 列并按文件路径解析。sharegpt + images 列是 LLaMA-Factory 与 ms-swift
-都能直接读的通用结构；unsloth 需要按官方示例做几行 map 转换。
+images 列并按文件路径解析。轮次用 user/assistant 而非 human/gpt：LLaMA-Factory
+官方把这种写法称为 openai 格式并给出对应注册，ms-swift 的标准键也是
+messages + user/assistant，两边都少一层映射；unsloth 仍需几行 map 转换。
 
 标签等元信息写在逐行对齐的 labels.jsonl 侧车，训练时不读它。
 """
@@ -87,8 +88,8 @@ DATASET_FILE = "dataset.jsonl"
 INFO_FILE = "dataset_info.json"
 """导出产物：框架注册文件，LLaMA-Factory 据此解析 dataset.jsonl。"""
 
-DATASET_FORMAT = "sharegpt"
-"""导出结构：多模态 sharegpt，LLaMA-Factory 与 ms-swift 原生支持。"""
+DATASET_FORMAT = "messages"
+"""导出结构：多模态 messages（role: system/user/assistant + images 路径列）。"""
 
 IMAGE_GUARD_DATASET = "image_guard"
 """dataset_info.json 里的数据集名，训练时 dataset=image_guard 即可。"""
@@ -109,12 +110,15 @@ SCHEMA_VERSION = 1
 """样本字段结构版本号；字段变更时递增，导出侧据此做兼容。"""
 
 EXPORT_FORMATS = ("sharegpt",)
-"""唯一的导出格式：多模态 sharegpt（conversations 占位符 + images 路径列）。
+"""唯一的导出格式：多模态 messages（system/user/assistant + images 路径列）。
 
-不用 OpenAI 的 messages/image_url 结构：那是接口请求体，不是训练格式。
-LLaMA-Factory 的 mm_plugin 里没有 image_url 这个字面量，图片只能走独立的
-images 列并按文件路径解析；unsloth 的图片字段名是 image 也不是 image_url。
-sharegpt + images 路径列同时被 LLaMA-Factory 与 ms-swift 原生支持。"""
+不用 content 分块里的 image_url：那是接口请求体，不是训练格式。LLaMA-Factory
+的 mm_plugin 里没有 image_url 这个字面量，图片只能走独立的 images 列并按文件
+路径解析；unsloth 的图片字段名是 image 也不是 image_url。
+
+轮次用 role: user/assistant 而不是 from: human/gpt——LLaMA-Factory 官方文档把
+前者称为 openai 格式并给出 role_tag/content_tag 注册写法，ms-swift 的标准键
+也是 messages + user/assistant，两边都少一层映射。"""
 
 FORMAT_ALIASES = {
     "sft": "sharegpt",
@@ -648,32 +652,32 @@ class DatasetRecorder:
     def _dataset_record(self, sample: dict, response: dict, images: list[str] | None = None) -> dict:
         """通用多模态训练样本：LLaMA-Factory 与 ms-swift 可直接读取。
 
-        - `conversations`：human / gpt 轮流，图片位置写 `<image>` 占位符，
+        - `messages`：system / user / assistant 轮次，图片位置写 `<image>` 占位符，
           数量必须与 `images` 列严格相等（训练框架据此对齐图与文本）；
-        - `images`：图片文件路径，相对数据集根目录，配合 media_dir 解析；
-        - `system`：完整审核规则，会作为 system 轮次参与训练。
+        - `images`：图片文件路径，相对数据集根目录，配合 media_dir 解析。
 
-        规则放 system、指令放 human：模型学的是"按 system 的规则判图"，换一套违规
+        用 `role: user/assistant` 而不是 sharegpt 默认的 `from: human/gpt`：LLaMA-Factory
+        把前者称为 openai 格式并给出对应注册写法（role_tag/content_tag 映射），
+        ms-swift 的标准键也正好是 `messages` + `user`/`assistant`，两边都少一层映射。
+
+        规则放 system、指令放 user：模型学的是"按 system 的规则判图"，换一套违规
         标准只改 system 即可复用同一个模型。
 
-        unsloth 不直接读这个结构（它的 vision 示例用 messages 内容分块
-        `{"type":"image","image":<路径或PIL>}`），按官方文档几行 map 即可转换；
-        这里选择 sharegpt 是因为它同时被 LLaMA-Factory 与 ms-swift 原生支持。
+        unsloth 仍不能直接读（它的 vision 示例用内容分块
+        `{"type":"image","image":<路径或PIL>}`），按官方文档几行 map 即可转换。
         """
-        request = sample.get("request", {})
         if images is None:
             images = self._image_files(sample)
         # 占位符数量必须与 images 列严格相等，训练框架据此对齐图与文本；
-        # 图片位放在句首是 LLaMA-Factory 官方示例的写法（"<image>user instruction"）
+        # 图片位放在句首是官方示例的写法（"<image>user instruction"）
         value = "".join(["<image>"] * len(images)) + USER_INSTRUCTION
-        return {
-            "conversations": [
-                {"from": "human", "value": value},
-                {"from": "gpt", "value": self._target_text(response)},
-            ],
-            "system": request.get("prompt", ""),
-            "images": images,
-        }
+        messages: list[dict] = []
+        system = str(sample.get("request", {}).get("prompt") or "")
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": value})
+        messages.append({"role": "assistant", "content": self._target_text(response)})
+        return {"messages": messages, "images": images}
 
     @staticmethod
     def _label_record(sample: dict, response: dict) -> dict:
@@ -845,17 +849,19 @@ class DatasetRecorder:
         return {
             IMAGE_GUARD_DATASET: {
                 "file_name": DATASET_FILE,
+                # LLaMA-Factory 读 dataset_info.json 才知道怎么解析：messages 列
+                # 配 role/content 标签即官方文档里的 openai 写法；images 列照旧。
                 "formatting": "sharegpt",
                 "columns": {
-                    "messages": "conversations",
-                    "system": "system",
+                    "messages": "messages",
                     "images": "images",
                 },
                 "tags": {
-                    "role_tag": "from",
-                    "content_tag": "value",
-                    "user_tag": "human",
-                    "assistant_tag": "gpt",
+                    "role_tag": "role",
+                    "content_tag": "content",
+                    "user_tag": "user",
+                    "assistant_tag": "assistant",
+                    "system_tag": "system",
                 },
             }
         }

@@ -196,7 +196,7 @@ dataset/
 
 | 文件 | 用途 |
 | :--- | :--- |
-| `dataset.jsonl` | 训练文件。一行一条样本，多模态 sharegpt 结构 |
+| `dataset.jsonl` | 训练文件。一行一条样本，多模态 `messages` 结构（system / user / assistant） |
 | `images/` | 样本图片。**导出时从留存目录复制过来**，导出产物可以整体搬走 |
 | `dataset_info.json` | LLaMA-Factory 注册文件，说明各列怎么解析 |
 | `labels.jsonl` | 标注侧车。与训练文件逐行对齐，按 `id` 关联，仅供筛选正负样本 |
@@ -205,10 +205,12 @@ dataset/
 `dataset.jsonl` 一行一条（下例为便于阅读做了换行与缩进，实际一行一条）：
 
 ```json
-{"conversations":[{"from":"human","value":"<image>请按要求分析这张图片。"},{"from":"gpt","value":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}],"system":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n","images":["images/20261013-235253-629fd0_1.jpg"]}
+{"messages":[{"role":"system","content":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"},{"role":"user","content":"<image>请按要求分析这张图片。"},{"role":"assistant","content":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}],"images":["images/20261013-235253-629fd0_1.jpg"]}
 ```
 
-记忆点：**规则在 system，指令在 human，判定在 gpt**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，换一套违规标准只改 system 即可复用同一个模型。
+记忆点：**规则在 system，指令在 user，判定在 assistant**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，换一套违规标准只改 system 即可复用同一个模型。
+
+轮次用 `user`/`assistant` 而非 sharegpt 默认的 `human`/`gpt`：LLaMA-Factory 官方文档把这种写法称为 **openai 格式**（内容是 sharegpt 的一个特例），并给出对应的 `role_tag`/`content_tag` 注册写法；ms-swift 的标准键也正好是 `messages` + `user`/`assistant`。两边都不用再配角色映射表。
 
 ### 为什么不用 OpenAI 的 messages 结构
 
@@ -220,7 +222,7 @@ OpenAI 的 `messages` + `content[].image_url` 是**接口请求体**格式，不
 | ms-swift | 标准键 `messages` / `images`，图片列放**路径或 URL** | ❌ 只认自己的 content block 规范 |
 | unsloth | `messages` 内容分块 `{"type":"image","image":<路径或PIL对象>}` | ❌ 字段名是 `image` 不是 `image_url`，需要几行 map 转换 |
 
-所以导出改用 **sharegpt + `images` 路径列**——这是 LLaMA-Factory 与 ms-swift 都原生支持的通用结构（LLaMA-Factory 声明 `formatting` 取值就是 `{alpaca, sharegpt, openai}`，其中多模态只认 `images` 列）。
+所以导出改用 **`messages` 轮次 + `images` 路径列**：LLaMA-Factory 的 `formatting` 取值是 `{alpaca, sharegpt, openai}`，多模态三种写法都只认独立的 `images` 列，而 `messages` + `user`/`assistant` 正是官方文档里的 openai 写法；ms-swift 的标准键同样是 `messages`。
 
 **训练命令（LLaMA-Factory）**：把导出目录当作 `dataset_dir`，图片和 `dataset_info.json` 已在里面：
 
@@ -231,7 +233,7 @@ llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml \
   media_dir <导出目录>
 ```
 
-> unsloth 需要一步转换：把 `conversations` 映射成 `messages`、`{"from":"human","value":"<image>…"}` 拆成 `{"type":"text"}` 与 `{"type":"image","image":<路径>}` 两个分块。官方 vision 微调文档里有对应的 `convert_to_conversation` 示例，十几行代码。选 sharegpt 是因为它被两个主流框架原生支持，覆盖面更广。
+> unsloth 需要一步转换：把每个 `{"role":"user","content":"<image>…"}` 拆成 `{"type":"text","text":…}` 与 `{"type":"image","image":<路径>}` 两个分块。官方 vision 微调文档里有对应的 `convert_to_conversation` 示例，十几行代码。
 
 > 插件运行时是把规则和图片塞在同一条 user 消息里发给供应商的；导出时把规则拆到 system，是为了让微调后的模型行为更稳。两者对模型语义等价，替换现有供应商不需要改插件提示词。
 
@@ -258,7 +260,7 @@ llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml \
 * **审核白名单**：配置中心的「范围与处置」可维护白名单用户；名单内用户发送的图片**既不审核也不记录**，群聊与私聊均生效，概览顶栏会显示白名单人数。
 * **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
 * **配置中心**：七个分组标签页（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据集留存）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
-* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为多模态 sharegpt 结构的 dataset.jsonl（图片与 LLaMA-Factory 注册文件一并复制，导出目录可整体搬走）；每条记录可单独删除（连同图片一起清理），也可整体清空留存（已导出的产物不受影响）。
+* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为多模态 messages 结构的 dataset.jsonl（system / user / assistant，图片与 LLaMA-Factory 注册文件一并复制，导出目录可整体搬走）；每条记录可单独删除（连同图片一起清理），也可整体清空留存（已导出的产物不受影响）。
 * **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
 * **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
 
