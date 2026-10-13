@@ -1824,12 +1824,15 @@ class ImageGuard(Star):
         stats = self._dataset.stats()
         preview: list[dict] = []
         try:
-            # 只读末尾若干条：base64 内联在样本里，全量解析会把接口拖成秒级响应
-            merged = self._dataset.load_samples(limit=DATASET_PREVIEW_LIMIT)
+            # 只读末尾若干条：base64 内联在样本里，全量解析会把接口拖成秒级响应。
+            # trainable_only 与导出口径一致——页面上看得到的就是能导出去的。
+            merged = self._dataset.load_samples(
+                limit=DATASET_PREVIEW_LIMIT, trainable_only=True
+            )
         except Exception as e:
             logger.warning(f"[ImageGuard] 读取数据集失败: {e}")
             merged = []
-        total = int(stats.get("samples", len(merged)))
+        usable = int(stats.get("usable", len(merged)))
         for item in merged:
             sample = item.get("sample", {})
             response = item.get("response", {})
@@ -1869,9 +1872,10 @@ class ImageGuard(Star):
             "enabled": True,
             "stats": stats,
             "samples": preview,
-            "total": total,
+            "total": usable,
+            "excluded": int(stats.get("excluded", 0)),
             "preview_limit": DATASET_PREVIEW_LIMIT,
-            "truncated": total > len(preview),
+            "truncated": usable > len(preview),
             "formats": ["openai", "sharegpt", "raw"],
         }
 

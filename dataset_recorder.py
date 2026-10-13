@@ -499,10 +499,12 @@ class DatasetRecorder:
         except OSError:
             return 0
 
-    def load_samples(self, limit: int = 0) -> list[dict]:
+    def load_samples(self, limit: int = 0, trainable_only: bool = False) -> list[dict]:
         """把请求侧与响应侧按 id 合并成完整样本。
 
         `limit` > 0 时只取末尾若干条（供页面预览）；导出必须传 0，否则会漏样本。
+        `trainable_only` 为 True 时只返回成功且返回非空的样本（页面预览与导出
+        都用它），失败与在途记录留在磁盘上供排查，不进数据集也不上页面。
         """
         responses = {str(item.get("id")): item for item in self._read_jsonl(self.responses_path)}
         merged: list[dict] = []
@@ -510,13 +512,31 @@ class DatasetRecorder:
             response = responses.get(str(sample.get("id")))
             if response is None:
                 response = {"id": sample.get("id"), "status": "pending", "text": "", "tags": [], "label": "unknown", "reason": "", "error": "", "elapsed_ms": None, "recorded_at": ""}
-            merged.append({"sample": sample, "response": response})
+            item = {"sample": sample, "response": response}
+            if trainable_only and not self._is_trainable(item):
+                continue
+            merged.append(item)
         return merged
 
+    @staticmethod
+    def _is_trainable(item: dict) -> bool:
+        """能否作为训练样本：必须是成功调用且模型返回非空。
+
+        调用失败、返回为空、以及只落盘了请求侧的在途样本都要排除——它们没有
+        可学习的监督目标，混进数据集只会教模型输出空串。页面与导出共用这一条
+        判据，避免出现"页面看得到、导出却没有"的错位。
+        """
+        response = item.get("response") or {}
+        if response.get("status") != "ok":
+            return False
+        return bool(str(response.get("text") or "").strip())
+
     def stats(self) -> dict:
-        """供插件页展示：条数、占用、磁盘余量、暂停原因。"""
+        """供插件页展示：条数、可导出量、占用、磁盘余量、暂停原因。"""
         samples = self.count_samples()
-        responses = len(self._read_jsonl(self.responses_path)) if self.responses_path.exists() else 0
+        entries = self._read_jsonl(self.responses_path) if self.responses_path.exists() else []
+        responses = len(entries)
+        usable = sum(1 for item in entries if self._is_trainable({"response": item}))
         size = 0
         if self._root.exists():
             for path in self._root.rglob("*"):
@@ -531,6 +551,9 @@ class DatasetRecorder:
             "dir": str(self._root),
             "samples": samples,
             "responses": responses,
+            "usable": usable,
+            "excluded": max(0, samples - usable),
+            "failed": sum(1 for item in entries if item.get("status") == "failed"),
             "pending": max(0, samples - responses),
             "size_bytes": size,
             "limit": limit,
@@ -611,14 +634,31 @@ class DatasetRecorder:
         }
 
     def export(self, fmt: str = "sft", limit: int = 0) -> dict:
-        """导出数据集，返回产物路径与统计；未开启或没有样本时不写任何文件。"""
+        """导出数据集，返回产物路径与统计；未开启或没有样本时不写任何文件。
+
+        只导出成功且模型返回非空的样本：失败与空返回的记录留在数据集目录里供
+        排查，但不进数据集——它们没有监督目标，会污染微调结果。
+        """
         if not self._enabled:
             return {"ok": False, "message": "留存prompt 未开启，没有可导出的数据集"}
-        merged = self.load_samples()
-        if limit > 0:
-            merged = merged[-limit:]
-        if not merged:
+        total = self.count_samples()
+        if total <= 0:
             return {"ok": False, "message": "数据集为空，先让插件跑几条审核再导出"}
+
+        # 只取成功且返回非空的样本：失败记录没有监督目标，会污染微调结果
+        usable = self.load_samples(trainable_only=True)
+        skipped = max(0, total - len(usable))
+        if limit > 0:
+            usable = usable[-limit:]
+        if not usable:
+            return {
+                "ok": False,
+                "message": (
+                    f"没有可导出的成功样本：{total} 条留存记录里没有一条"
+                    "同时具备成功状态与非空模型返回"
+                ),
+            }
+        merged = usable
 
         fmt = FORMAT_ALIASES.get(fmt, fmt)
         if fmt not in EXPORT_FORMATS:
@@ -668,8 +708,8 @@ class DatasetRecorder:
             "exported_at": _iso_now(),
             "format": fmt,
             "samples": len(merged),
+            "skipped_unusable": skipped,
             "with_image": sum(1 for item in merged if self._data_urls(item["sample"])),
-            "with_response": sum(1 for item in merged if item["response"].get("status") == "ok"),
             "label_violation": sum(1 for item in merged if item["response"].get("label") == "violation"),
             "label_safe": sum(1 for item in merged if item["response"].get("label") == "safe"),
             "source_dir": str(self._root),
@@ -681,7 +721,10 @@ class DatasetRecorder:
             )
         except OSError:
             pass
-        return {"ok": True, "message": "导出完成", "dir": str(target), "manifest": manifest}
+        message = f"导出完成，共 {len(merged)} 条成功样本"
+        if skipped:
+            message += f"（已跳过 {skipped} 条失败/空返回记录）"
+        return {"ok": True, "message": message, "dir": str(target), "manifest": manifest}
 
     def _export_raw(self, target: Path, merged: list[dict]) -> str:
         """raw 格式：原样拷出两份 JSONL，训练侧自行合并。"""

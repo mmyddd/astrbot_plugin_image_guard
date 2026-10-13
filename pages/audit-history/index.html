@@ -665,7 +665,7 @@
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="dataset-title">数据集留存（留存prompt）</h2>
-                <p class="card-sub">把每次送审的图片 base64、完整提示词与模型返回一起落盘，模型给出的标签直接作为标注，用于本地模型微调。</p>
+                <p class="card-sub">把每次送审的图片 base64、完整提示词与模型返回一起落盘，模型给出的标签直接作为标注，用于本地模型微调。只有调用成功且返回非空的样本会被导出，失败记录留在本地供排查。</p>
               </div>
             </header>
             <div class="card-body">

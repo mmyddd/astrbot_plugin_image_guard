@@ -875,8 +875,10 @@
     if (stats.at_limit) {
       return ['warn', '已达到样本条数上限，停止留存新样本（旧样本不会被淘汰）。先导出并清空留存即可继续。'];
     }
-    if (stats.pending > 0) {
-      return ['warn', '有 ' + format.int(stats.pending) + ' 条样本只落盘了请求侧（进程中断或调用仍在进行中）。'];
+    const excluded = Number(stats.excluded) || 0;
+    if (excluded > 0) {
+      return ['warn', '留存中：另有 ' + format.int(excluded) +
+        ' 条调用失败、返回为空或进行中的记录未纳入数据集（仅留在磁盘供排查），不计入上方统计也不导出。'];
     }
     return ['success', '留存中：图片 base64、提示词与模型返回会写入 ' + (stats.dir || '') + '。'];
   }
@@ -897,7 +899,7 @@
     status.textContent = tone[1];
 
     const items = [
-      ['已留存样本', format.int(stats.samples || 0) + ' 条'],
+      ['数据集样本', format.int(stats.usable || 0) + ' 条'],
       ['占用空间', format.bytes(stats.size_bytes || 0)],
       ['样本上限', stats.limit > 0 ? format.int(stats.limit) + ' 条' : '不限制'],
       ['磁盘余量', format.bytes(stats.free_bytes || 0)]
@@ -909,12 +911,15 @@
     const samples = data.samples || [];
     const hint = $('#dataset-preview-hint');
     if (hint) {
-      hint.textContent = data.truncated
+      const suffix = data.excluded
+        ? '；另有 ' + format.int(data.excluded) + ' 条失败或空返回记录未纳入数据集'
+        : '';
+      hint.textContent = (data.truncated
         ? '共 ' + format.int(data.total || 0) + ' 条，仅展示最近 ' + format.int(samples.length) + ' 条'
-        : (samples.length ? '共 ' + format.int(samples.length) + ' 条' : '暂无样本，先让插件审核几张图片');
+        : (samples.length ? '共 ' + format.int(samples.length) + ' 条' : '暂无样本，先让插件审核几张图片')) + suffix;
     }
     if (!samples.length) {
-      list.innerHTML = '<div class="mapper-empty">还没有留存任何样本</div>';
+      list.innerHTML = '<div class="mapper-empty">还没有可用的数据集样本</div>';
       return;
     }
     list.innerHTML = samples.slice().reverse().map(sample => {
@@ -984,8 +989,10 @@
       const result = await IG.api.datasetExport(datasetFormat, 0);
       const manifest = result.manifest || {};
       setDatasetNote(
-        '导出完成：' + format.int(manifest.samples || 0) + ' 条 → ' + (result.dir || '') +
-        '（含图片 ' + format.int(manifest.with_image || 0) + ' 条，模型返回 ' + format.int(manifest.with_response || 0) + ' 条）',
+        '导出完成：' + format.int(manifest.samples || 0) + ' 条成功样本 → ' + (result.dir || '') +
+        '（含图片 ' + format.int(manifest.with_image || 0) + ' 条，违规 ' +
+        format.int(manifest.label_violation || 0) + ' / 安全 ' + format.int(manifest.label_safe || 0) + '）' +
+        (manifest.skipped_unusable ? '；已跳过 ' + format.int(manifest.skipped_unusable) + ' 条失败或空返回记录' : ''),
         'success'
       );
       toast('数据集已导出到 ' + (result.dir || ''), 'success');
