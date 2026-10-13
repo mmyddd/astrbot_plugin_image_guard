@@ -48,14 +48,16 @@
     'compressed_image_max_bytes', 'audit_history_max_records',
     'audit_cache_threshold', 'audit_cache_max_entries',
     'systemone_violation_threshold', 'systemone_timeout_seconds',
-    'systemone_max_image_bytes'
+    'systemone_max_image_bytes',
+    'dataset_max_samples', 'dataset_max_image_mb', 'dataset_min_free_mb'
   ];
 
   const TEXTAREA_FIELDS = ['cfg-group_scope', 'cfg-private_scope'];
   const CHECKBOX_FIELDS = [
     'cfg-enable_recall', 'cfg-keep_compressed_image_in_temp',
     'cfg-debug_log_llm_response', 'cfg-audit_cache_enabled',
-    'cfg-systemone_enabled'
+    'cfg-systemone_enabled',
+    'cfg-dataset_capture_enabled', 'cfg-dataset_capture_raw_response'
   ];
 
   // 门控关闭时这些字段不可编辑：只有打开开关后才能分别设置
@@ -66,6 +68,13 @@
     'cfg-systemone_max_image_bytes', 'cfg-systemone_question',
     'cfg-systemone_vision_prompt',
     'editor-systemone_sensitive_texts', 'editor-systemone_forbidden_descriptions'
+  ];
+
+  // 留存prompt 关闭时这些字段不可编辑：关着还能改参数只会让人以为正在记录
+  const DATASET_LOCKED_FIELDS = [
+    'cfg-dataset_dir', 'cfg-dataset_max_samples',
+    'cfg-dataset_max_image_mb', 'cfg-dataset_min_free_mb',
+    'cfg-dataset_capture_raw_response'
   ];
 
   let baseline = '';
@@ -93,6 +102,29 @@
     });
     const test = $('#gate-test');
     if (test) test.disabled = !on;
+  }
+
+  /* 留存prompt 关闭时锁住参数区，避免误以为正在记录 */
+  function syncDatasetLock() {
+    const toggle = $('#cfg-dataset_capture_enabled');
+    const on = toggle ? toggle.checked : false;
+    const panel = $('#dataset-panel');
+    if (panel) {
+      if (on) panel.removeAttribute('data-locked');
+      else panel.setAttribute('data-locked', '1');
+    }
+    DATASET_LOCKED_FIELDS.forEach(id => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.disabled = !on;
+      node.setAttribute('aria-disabled', on ? 'false' : 'true');
+    });
+    ['#dataset-export', '#dataset-refresh', '#dataset-clear'].forEach(selector => {
+      const node = $(selector);
+      if (node) node.disabled = !on;
+    });
+    $$('#dataset-format .seg-btn').forEach(button => { button.disabled = !on; });
+    if (!on) renderDatasetEmpty();
   }
 
   /* ── 规则编辑器 ───────────────────────────────────────── */
@@ -502,6 +534,14 @@
     $('#cfg-systemone_enabled').checked = truthy(config.systemone_enabled);
     syncGateLock();
 
+    $('#cfg-dataset_dir').value = config.dataset_dir || '';
+    $('#cfg-dataset_max_samples').value = valueOr(config.dataset_max_samples, 2000);
+    $('#cfg-dataset_max_image_mb').value = valueOr(config.dataset_max_image_mb, 8);
+    $('#cfg-dataset_min_free_mb').value = valueOr(config.dataset_min_free_mb, 512);
+    $('#cfg-dataset_capture_raw_response').checked = truthy(config.dataset_capture_raw_response);
+    $('#cfg-dataset_capture_enabled').checked = truthy(config.dataset_capture_enabled);
+    syncDatasetLock();
+
     reportTargets = (config.group_report_targets || [])
       .filter(item => item && typeof item === 'object')
       .map(item => ({
@@ -605,7 +645,13 @@
       systemone_question: $('#cfg-systemone_question').value.trim(),
       systemone_vision_prompt: $('#cfg-systemone_vision_prompt').value,
       systemone_sensitive_texts: rules.systemone_sensitive_texts.slice(),
-      systemone_forbidden_descriptions: rules.systemone_forbidden_descriptions.slice()
+      systemone_forbidden_descriptions: rules.systemone_forbidden_descriptions.slice(),
+      dataset_capture_enabled: $('#cfg-dataset_capture_enabled').checked,
+      dataset_dir: $('#cfg-dataset_dir').value.trim(),
+      dataset_max_samples: intOr($('#cfg-dataset_max_samples').value, 2000),
+      dataset_max_image_mb: intOr($('#cfg-dataset_max_image_mb').value, 8),
+      dataset_min_free_mb: intOr($('#cfg-dataset_min_free_mb').value, 512),
+      dataset_capture_raw_response: $('#cfg-dataset_capture_raw_response').checked
     };
     if (opts.includeProviders !== false) {
       // __index 提示后端：掩码 Key 应该回填哪一条已保存的明文（重命名/复制后依然成立）
@@ -704,6 +750,7 @@
       IG.views.renderSnapshot();
       IG.views.renderScopeSummary();
       await refreshStorage();
+      await loadDataset();
       updateDirtyUi();
     } catch (error) {
       toast('读取配置失败：' + (error && error.message ? error.message : error), 'error');
@@ -801,6 +848,173 @@
     toast('已恢复到上次读取的配置', 'success');
   }
 
+  /* ── 数据集留存 ───────────────────────────────────────── */
+  let datasetFormat = 'openai';
+
+  function renderDatasetEmpty() {
+    const status = $('#dataset-status');
+    if (status) {
+      status.dataset.state = 'off';
+      status.textContent = '留存prompt 已关闭：不创建目录、不写文件，审核链路与没有该功能时完全一致。';
+    }
+    const stats = $('#dataset-stats');
+    if (stats) stats.innerHTML = '';
+    const list = $('#dataset-preview');
+    if (list) list.innerHTML = '';
+    const hint = $('#dataset-preview-hint');
+    if (hint) hint.textContent = '开启后这里会列出最近留存的样本';
+    const note = $('#dataset-note');
+    if (note) show(note, false);
+  }
+
+  function datasetStatusText(data) {
+    const stats = data.stats || {};
+    if (stats.paused_no_space) {
+      return ['error', '磁盘余量低于下限，留存已暂停；清理磁盘或调低「磁盘余量下限」后重新开启开关即可恢复。'];
+    }
+    if (stats.at_limit) {
+      return ['warn', '已达到样本条数上限，停止留存新样本（旧样本不会被淘汰）。先导出并清空留存即可继续。'];
+    }
+    if (stats.pending > 0) {
+      return ['warn', '有 ' + format.int(stats.pending) + ' 条样本只落盘了请求侧（进程中断或调用仍在进行中）。'];
+    }
+    return ['success', '留存中：图片 base64、提示词与模型返回会写入 ' + (stats.dir || '') + '。'];
+  }
+
+  function renderDataset(data) {
+    const status = $('#dataset-status');
+    const statsHost = $('#dataset-stats');
+    const list = $('#dataset-preview');
+    if (!status || !statsHost || !list) return;
+
+    if (!data || !data.enabled) {
+      renderDatasetEmpty();
+      return;
+    }
+    const stats = data.stats || {};
+    const tone = datasetStatusText(data);
+    status.dataset.state = tone[0];
+    status.textContent = tone[1];
+
+    const items = [
+      ['已留存样本', format.int(stats.samples || 0) + ' 条'],
+      ['占用空间', format.bytes(stats.size_bytes || 0)],
+      ['样本上限', stats.limit > 0 ? format.int(stats.limit) + ' 条' : '不限制'],
+      ['磁盘余量', format.bytes(stats.free_bytes || 0)]
+    ];
+    statsHost.innerHTML = items.map(item =>
+      '<div class="store-item"><span>' + esc(item[0]) + '</span><strong>' + esc(item[1]) + '</strong></div>'
+    ).join('');
+
+    const samples = data.samples || [];
+    const hint = $('#dataset-preview-hint');
+    if (hint) {
+      hint.textContent = data.truncated
+        ? '共 ' + format.int(data.total || 0) + ' 条，仅展示最近 ' + format.int(samples.length) + ' 条'
+        : (samples.length ? '共 ' + format.int(samples.length) + ' 条' : '暂无样本，先让插件审核几张图片');
+    }
+    if (!samples.length) {
+      list.innerHTML = '<div class="mapper-empty">还没有留存任何样本</div>';
+      return;
+    }
+    list.innerHTML = samples.slice().reverse().map(sample => {
+      const images = sample.images || [];
+      const imageText = images.map(image => {
+        if (image.missing_reason) return '第' + image.index + '张 · ' + image.missing_reason;
+        return '第' + image.index + '张 · ' + (image.mime || '未知格式') + ' · ' +
+          format.bytes(image.bytes || 0) + ' · base64 ' + format.bytes(image.base64_bytes || 0);
+      }).join('；') || '无图片输入';
+      const statusLabel = sample.status === 'ok' ? '已完成' : (sample.status === 'failed' ? '调用失败' : '进行中');
+      const statusTone = sample.status === 'ok' ? 'badge-ok' : (sample.status === 'failed' ? 'badge-fail' : 'badge-idle');
+      const labelTone = sample.label === 'violation' ? 'badge-fail' : (sample.label === 'safe' ? 'badge-ok' : 'badge-idle');
+      const labelText = sample.label === 'violation' ? 'VIOLATION' : (sample.label === 'safe' ? 'SAFE' : '未判定');
+      const tags = (sample.tags || []).length
+        ? '<div class="tag-list">' + sample.tags.map(tag => '<span class="tag">' + esc(tag) + '</span>').join('') + '</div>'
+        : '<div class="tag-list"><span class="tag">无标签</span></div>';
+      return '<article class="dataset-card">' +
+        '<div class="dataset-card-head">' +
+        '<span class="badge ' + statusTone + '">' + esc(statusLabel) + '</span>' +
+        '<span class="badge ' + labelTone + '">' + esc(labelText) + '</span>' +
+        '<strong>' + esc(sample.id || '') + '</strong>' +
+        '<span class="dataset-card-time">' + esc(format.fullTime(sample.created_at)) + '</span>' +
+        '</div>' +
+        '<pre class="dataset-prompt">' + esc(sample.prompt || '（无提示词）') + '</pre>' +
+        '<div class="dataset-card-meta">' +
+        '<span>图片：' + esc(imageText) + '</span>' +
+        '<span>返回：' + format.int((sample.text || '').length) + ' 字' + (sample.elapsed_ms ? ' · ' + format.ms(sample.elapsed_ms) : '') + '</span>' +
+        (sample.provider ? '<span>供应商：<code>' + esc(sample.provider) + '</code></span>' : '') +
+        (sample.error ? '<span>错误：' + esc(sample.error) + '</span>' : '') +
+        '</div>' + tags +
+        '</article>';
+    }).join('');
+  }
+
+  async function loadDataset() {
+    if (!IG.bridge.isEmbedded()) return;
+    const toggle = $('#cfg-dataset_capture_enabled');
+    if (toggle && !toggle.checked) {
+      renderDatasetEmpty();
+      return;
+    }
+    try {
+      const data = await IG.api.dataset();
+      renderDataset(data);
+    } catch (error) {
+      const status = $('#dataset-status');
+      if (status) {
+        status.dataset.state = 'error';
+        status.textContent = '读取数据集失败：' + (error && error.message ? error.message : error);
+      }
+    }
+  }
+
+  function setDatasetNote(message, tone) {
+    const note = $('#dataset-note');
+    if (!note) return;
+    note.textContent = message;
+    note.dataset.state = tone || '';
+    show(note, Boolean(message));
+  }
+
+  async function exportDataset() {
+    const button = $('#dataset-export');
+    if (button) button.classList.add('is-busy');
+    setDatasetNote('正在导出…', '');
+    try {
+      const result = await IG.api.datasetExport(datasetFormat, 0);
+      const manifest = result.manifest || {};
+      setDatasetNote(
+        '导出完成：' + format.int(manifest.samples || 0) + ' 条 → ' + (result.dir || '') +
+        '（含图片 ' + format.int(manifest.with_image || 0) + ' 条，模型返回 ' + format.int(manifest.with_response || 0) + ' 条）',
+        'success'
+      );
+      toast('数据集已导出到 ' + (result.dir || ''), 'success');
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      setDatasetNote('导出失败：' + message, 'error');
+      toast('导出失败：' + message, 'error');
+    } finally {
+      if (button) button.classList.remove('is-busy');
+    }
+  }
+
+  async function clearDataset() {
+    const ok = await IG.confirm({
+      title: '清空数据集留存',
+      message: '删除 samples.jsonl、responses.jsonl 与 images/ 下的全部样本；已导出的 export/ 产物会保留。',
+      confirmText: '全部清空'
+    });
+    if (!ok) return;
+    try {
+      const result = await IG.api.datasetClear();
+      toast('已清空数据集（删除 ' + format.int(result && result.removed ? result.removed : 0) + ' 项）', 'success');
+      setDatasetNote('', '');
+      await loadDataset();
+    } catch (error) {
+      toast('清空失败：' + (error && error.message ? error.message : error), 'error');
+    }
+  }
+
   /* ── 维护操作 ─────────────────────────────────────────── */
   async function clearCache() {
     const ok = await IG.confirm({
@@ -880,6 +1094,30 @@
     const gateTest = $('#gate-test');
     if (gateTest) gateTest.addEventListener('click', testSystemone);
 
+    // 留存prompt 开关驱动参数区可编辑状态
+    const datasetToggle = $('#cfg-dataset_capture_enabled');
+    if (datasetToggle) {
+      datasetToggle.addEventListener('change', () => {
+        syncDatasetLock();
+        if (datasetToggle.checked) loadDataset();
+        markDirty();
+      });
+    }
+    $$('#dataset-format .seg-btn').forEach(button => {
+      button.addEventListener('click', () => {
+        datasetFormat = button.dataset.format || 'openai';
+        $$('#dataset-format .seg-btn').forEach(other => {
+          other.classList.toggle('is-active', other === button);
+        });
+      });
+    });
+    const datasetExport = $('#dataset-export');
+    if (datasetExport) datasetExport.addEventListener('click', exportDataset);
+    const datasetRefresh = $('#dataset-refresh');
+    if (datasetRefresh) datasetRefresh.addEventListener('click', loadDataset);
+    const datasetClear = $('#dataset-clear');
+    if (datasetClear) datasetClear.addEventListener('click', clearDataset);
+
     const form = $('#section-rules').closest('.settings-main');
     if (form) {
       form.addEventListener('input', event => {
@@ -900,6 +1138,8 @@
     closeProviderModal: closeProviderModal,
     markDirty: markDirty,
     updateDirtyUi: updateDirtyUi,
+    loadDataset: loadDataset,
+    syncDatasetLock: syncDatasetLock,
     isDirty() { return state.configDirty; },
     fillForm: fillForm
   };

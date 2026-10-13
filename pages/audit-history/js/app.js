@@ -14,7 +14,7 @@
   const toast = IG.toast;
 
   const VIEWS = ['overview', 'records', 'settings'];
-  const SECTIONS = ['rules', 'providers', 'gate', 'scope', 'media', 'cache'];
+  const SECTIONS = ['rules', 'providers', 'gate', 'scope', 'media', 'cache', 'dataset'];
 
   let statusTimer = 0;
   let lastHash = '';
@@ -496,7 +496,7 @@
     IG.settings.init();
     bindGlobal();
     const version = $('#brand-version');
-    if (version) version.textContent = 'v1.12.0';
+    if (version) version.textContent = 'v1.13.0';
 
     IG.views.fillList($('#recent-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');
     IG.views.fillList($('#records-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');

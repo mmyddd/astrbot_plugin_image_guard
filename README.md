@@ -83,6 +83,12 @@
 | **audit_cache_max_entries** | 缓存条目上限，超出后淘汰计数最低的条目，`0` 表示不限制（不推荐）。 | `10000` |
 | **keep_compressed_image_in_temp** | 调试开关：把压缩后的图片保存到 `data/temp/astrbot_plugin_image_guard` 并在日志中输出路径。 | `false` |
 | **debug_log_llm_response** | 调试开关：把模型原始响应写入日志，可能包含判定理由或图片相关敏感信息。 | `false` |
+| **dataset_capture_enabled** | **留存prompt**：把每次送审的图片 base64、完整提示词与模型返回落盘，模型给出的标签直接作为标注，供本地模型微调。**关闭时不创建任何目录与文件**。 | `false` |
+| **dataset_dir** | 数据集存储目录，留空使用默认目录 `data/plugin_data/image_guard/dataset`。 | 留空 |
+| **dataset_max_samples** | 样本条数上限，达到后停止留存（不淘汰旧样本，避免静默丢数据）。 | `2000` |
+| **dataset_max_image_mb** | 单图留存上限（MB），超出只记元数据不存 base64。 | `8` |
+| **dataset_min_free_mb** | 磁盘余量下限（MB），低于该值自动暂停留存。 | `512` |
+| **dataset_capture_raw_response** | 是否额外保存接口原始响应 JSON（含 token 用量）。 | `false` |
 
 ### 🚦 门控降本（SystemOne，可选）
 
@@ -111,6 +117,119 @@
 
 ---
 
+## 🧪 留存prompt：把审核过程变成微调数据集
+
+插件在**配置中心 → 数据集留存**提供一个「留存prompt」开关（默认**关闭**）。开启后，每次送审都会留下三样东西，外加模型自己打的标签：
+
+1. **发送给模型的图片**（压缩后实际送审的 data URL 与 base64 正文，解码后的图片文件同时落盘）；
+2. **发送给模型的提示词**（含自定义引导词与违规标准的完整 prompt）；
+3. **模型返回的内容**（原文、REASON、RESULT）；
+4. **模型打的标签**（`TAGS` 行解析结果，作为数据集的 `label` 与 `tags` 标注）。
+
+### 存储位置与格式
+
+默认目录 `data/plugin_data/image_guard/dataset`（可用 `dataset_dir` 改）：
+
+```
+dataset/
+├── samples.jsonl          请求侧：一行一条，含 prompt 与图片 base64
+├── responses.jsonl        响应侧：一行一条，含模型返回、标签与判定
+├── images/<样本id>/img_1.jpg   解码后的图片，训练框架可直接按路径读取
+└── export/<格式>-<时间戳>/      openai.json / sharegpt.json / samples.jsonl
+```
+
+拆分两个文件是为了对齐记录时机：**调用模型前**写 `samples.jsonl`，**模型返回后**写 `responses.jsonl`，两者用同一条 `id` 关联。进程在中途崩溃时请求侧已经落盘，不会整条丢失。
+
+`samples.jsonl` 单条记录：
+
+```json
+{
+  "id": "20261013-224912-a1b2c3",
+  "schema_version": 1,
+  "created_at": "2026-10-13 22:49:12",
+  "source": {"group_id": "888", "user_id": "10001", "user_name": "张三", "is_group": true},
+  "request": {
+    "prompt": "你是一个严格但公正的内容审核员……",
+    "provider": "", "model": "",
+    "image_count": 1,
+    "images": [{"index": 1, "mime": "image/jpeg", "base64": "/9j/4AAQ…", "bytes": 288,
+                "sha256": "…", "path": "images/20261013-224912-a1b2c3/img_1.jpg", "missing_reason": ""}]
+  }
+}
+```
+
+`responses.jsonl` 单条记录：
+
+```json
+{
+  "id": "20261013-224912-a1b2c3",
+  "status": "ok",
+  "text": "REASON: 裸露画面\nRESULT: VIOLATION\nTAGS: [\"裸露\",\"白丝\"]",
+  "tags": ["裸露", "白丝"],
+  "label": "violation",
+  "reason": "裸露画面",
+  "error": "",
+  "elapsed_ms": 1234,
+  "provider": "Gemini 主线路",
+  "model": "gemini-2.5-pro",
+  "recorded_at": "2026-10-13 22:49:14",
+  "raw": null
+}
+```
+
+### 边界情况
+
+| 情况 | 处理 |
+| :--- | :--- |
+| 开关关闭 | 不建目录、不写文件、不读盘，插件行为与没有该功能时完全一致 |
+| 图片为空 / 非 base64（HTTP URL、本地路径、空值） | 该张图记 `missing_reason`，**不阻断整条样本**——prompt 与模型返回仍然留存 |
+| base64 非法或解不出内容 | 同上，记 `missing_reason`，不写图片文件 |
+| 单图超过 `dataset_max_image_mb` | 只记字节数与摘要，不存 base64 与图片文件 |
+| 模型返回为空 | 记 `status: ok` + 空 `text`，保留 prompt 与图片，便于事后判断是模型截断还是提示词有问题 |
+| 模型调用失败 / 超时 | 请求侧照常落盘，响应侧记 `status: failed` 与错误原因 |
+| 达到 `dataset_max_samples` | 停止留存新样本（不淘汰旧样本），页面顶部提示先导出再清理 |
+| 磁盘余量低于 `dataset_min_free_mb` | 自动暂停留存并写日志告警，避免写满磁盘拖垮 AstrBot |
+
+### 导出
+
+配置中心 → 数据集留存 → 选格式 → **导出数据集**，产物写入 `<dataset_dir>/export/<格式>-<时间戳>/`：
+
+| 格式 | 文件 | 用途 |
+| :--- | :--- | :--- |
+| **标准 OpenAI**（默认） | `openai.json` | 与插件真实发往接口的请求体同构，可直接喂给 OpenAI 格式的微调管线 |
+| **ShareGPT** | `sharegpt.json` + `dataset_info.json` | 需要 human/gpt 会话结构、图片走路径列表的老式训练脚本 |
+| **原始 JSONL** | `samples.jsonl` + `responses.jsonl` + `README.md` | 自行清洗、合并或转成其它格式 |
+
+**标准 OpenAI** 的产物就是一行一条的 `messages`，图片以 `image_url` 分块内联为 data URL：
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "你是一个严格但公正的内容审核员……"},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ…"}}
+      ]
+    },
+    {"role": "assistant", "content": "REASON: 裸露画面\nRESULT: VIOLATION\nTAGS: [\"裸露\", \"白丝\"]"}
+  ],
+  "label": "violation",
+  "tags": ["裸露", "白丝"],
+  "id": "20261013-230623-68653a"
+}
+```
+
+`label` / `tags` / `id` 是给训练侧过滤与统计用的附加键，不属于 OpenAI 字段，标准训练框架会忽略它们；想按标签筛正负样本时直接读这三个键即可。
+
+> 插件本身没有独立的 system 提示词：规则、引导词与输出格式要求都拼在同一段 user 文本里发给模型。导出保持同构，微调后的模型可以直接替换现有供应商，不需要改提示词。
+
+三种格式都会附带 `manifest.json`（条数、含图条数、含模型返回条数、正负样本分布）。
+
+> ⚠️ 留存的数据包含用户图片与提示词，属于敏感内容：目录会长期占用磁盘，请自行确保存储安全，并定期导出后清理。数据集只用于本地模型微调，请遵守你所在地区关于数据留存与个人信息的法律要求。
+
+---
+
 ## 🖥️ 审核控制台（插件页）
 
 插件在 AstrBot WebUI 中提供一个独立的页面（`pages/audit-history`），无需进入插件配置页即可完成日常运维：
@@ -121,7 +240,8 @@
 * **审核用时**：概览显示平均单张耗时与峰值（按送审样本统计），每条记录卡片与详情抽屉标注该次审核的实际耗时，CSV 导出含「审核用时(毫秒)」列。
 * **审核白名单**：配置中心的「范围与处置」可维护白名单用户；名单内用户发送的图片**既不审核也不记录**，群聊与私聊均生效，概览顶栏会显示白名单人数。
 * **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
-* **配置中心**：五个分组标签页（审查规则 / LLM 供应商 / 范围与处置 / 图片与调试 / 缓存与存储）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
+* **配置中心**：七个分组标签页（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据集留存）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
+* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持按标准 OpenAI / ShareGPT / 原始 JSONL 三种格式一键导出，以及清空留存（已导出的产物保留）。
 * **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
 * **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
 
@@ -139,6 +259,9 @@
 | POST | `audit/providers/test` | 供应商连通性测试 |
 | POST | `audit/cache/clear` | 清空审核缓存指纹 |
 | POST | `audit/storage/prune` | 清理孤立图片 |
+| GET | `audit/dataset` | 数据集留存状态与样本预览（不回传 base64 正文） |
+| POST | `audit/dataset/export` | 按 `format`（openai / sharegpt / raw）导出数据集 |
+| POST | `audit/dataset/clear` | 清空已留存的样本与图片 |
 
 ---
 

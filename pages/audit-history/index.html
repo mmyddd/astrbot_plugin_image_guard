@@ -26,7 +26,7 @@
         </span>
         <span class="brand-text">
           <strong>ImageGuard</strong>
-          <em id="brand-version">v1.12.0</em>
+          <em id="brand-version">v1.13.0</em>
         </span>
       </a>
 
@@ -285,6 +285,7 @@
           <button class="tab-btn" type="button" data-section="scope" data-section-tab>范围与处置</button>
           <button class="tab-btn" type="button" data-section="media" data-section-tab>图片与调试</button>
           <button class="tab-btn" type="button" data-section="cache" data-section-tab>缓存与存储</button>
+          <button class="tab-btn" type="button" data-section="dataset" data-section-tab>数据集留存</button>
         </nav>
 
         <div class="settings-main">
@@ -655,6 +656,102 @@
                     </div>
                     <textarea class="textarea" id="cfg-systemone_vision_prompt" rows="3" spellcheck="false"></textarea>
                   </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <!-- 数据集留存 -->
+          <section class="card" id="section-dataset" data-section-panel="dataset" aria-labelledby="dataset-title">
+            <header class="card-head">
+              <div>
+                <h2 class="card-title" id="dataset-title">数据集留存（留存prompt）</h2>
+                <p class="card-sub">把每次送审的图片 base64、完整提示词与模型返回一起落盘，模型给出的标签直接作为标注，用于本地模型微调。</p>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="toggle-list">
+                <label class="toggle" for="cfg-dataset_capture_enabled">
+                  <input type="checkbox" id="cfg-dataset_capture_enabled">
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">
+                    <strong>留存prompt</strong>
+                    <span>关闭时不创建任何目录与文件，插件行为与没有该功能时完全一致；开启后会长期占用磁盘，且留存内容包含用户图片与提示词</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="dataset-panel" id="dataset-panel">
+                <div class="inline-grid">
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-dataset_dir">存储目录</label>
+                      <span class="field-hint">留空使用默认目录</span>
+                    </div>
+                    <input class="input input-mono" type="text" id="cfg-dataset_dir" placeholder="data/plugin_data/image_guard/dataset" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-dataset_max_samples">样本条数上限</label>
+                      <span class="field-hint">达到上限后停止留存，不淘汰旧样本</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-dataset_max_samples" min="0" max="200000" step="100" inputmode="numeric">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-dataset_max_image_mb">单图留存上限（MB）</label>
+                      <span class="field-hint">超出只记元数据，不存 base64</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-dataset_max_image_mb" min="0" max="64" step="1" inputmode="numeric">
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label class="field-label" for="cfg-dataset_min_free_mb">磁盘余量下限（MB）</label>
+                      <span class="field-hint">低于该值时暂停留存</span>
+                    </div>
+                    <input class="input" type="number" id="cfg-dataset_min_free_mb" min="0" max="102400" step="128" inputmode="numeric">
+                  </div>
+                </div>
+
+                <div class="toggle-list">
+                  <label class="toggle" for="cfg-dataset_capture_raw_response">
+                    <input type="checkbox" id="cfg-dataset_capture_raw_response">
+                    <span class="toggle-track" aria-hidden="true"></span>
+                    <span class="toggle-text">
+                      <strong>同时保存接口原始响应</strong>
+                      <span>额外记录 token 用量等元信息，体积更大，仅在排查供应商返回结构时需要</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div class="dataset-status" id="dataset-status" role="status" aria-live="polite"></div>
+                <div class="store-grid" id="dataset-stats"></div>
+
+                <div class="dataset-export">
+                  <div class="field">
+                    <div class="field-head">
+                      <span class="field-label">导出格式</span>
+                      <span class="field-hint">产物写入存储目录下的 export/ 子目录</span>
+                    </div>
+                    <div class="seg" id="dataset-format" role="group" aria-label="导出格式">
+                      <button class="seg-btn is-active" type="button" data-format="openai">标准 OpenAI</button>
+                      <button class="seg-btn" type="button" data-format="sharegpt">ShareGPT</button>
+                      <button class="seg-btn" type="button" data-format="raw">原始 JSONL</button>
+                    </div>
+                  </div>
+                  <div class="dataset-export-actions">
+                    <button class="btn btn-tonal" type="button" id="dataset-export">导出数据集</button>
+                    <button class="btn btn-ghost" type="button" id="dataset-refresh">刷新预览</button>
+                    <button class="btn btn-danger" type="button" id="dataset-clear">清空留存</button>
+                  </div>
+                  <p class="dataset-note" id="dataset-note" hidden></p>
+                </div>
+
+                <div class="field field-block">
+                  <div class="field-head">
+                    <span class="field-label">样本预览</span>
+                    <span class="field-hint" id="dataset-preview-hint">开启后这里会列出最近留存的样本</span>
+                  </div>
+                  <div class="dataset-list" id="dataset-preview"></div>
                 </div>
               </div>
             </div>

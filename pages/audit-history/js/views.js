@@ -285,7 +285,8 @@
       ['审核缓存', config.cache_enabled ? '已启用' : '已关闭'],
       ['门控降本', config.gate_enabled
         ? '已启用 · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)
-        : '已关闭']
+        : '已关闭'],
+      ['留存prompt', config.dataset_enabled ? '已开启 · 用于微调数据集' : '已关闭']
     ];
     container.innerHTML = '<div class="snapshot-list">' + rows.map(row =>
       '<div class="snapshot-row"><span>' + esc(row[0]) + '</span><strong>' + esc(row[1]) + '</strong></div>'
@@ -330,7 +331,10 @@
       { text: format.int(config.rule_count || 0) + ' 条规则', tone: 'accent', title: '敏感文字与违规画面描述总量' },
       { text: (config.provider_count || 0) + ' 个供应商', tone: config.provider_count ? 'muted' : 'warn', title: (config.provider_names || []).join('、') || '未配置供应商' },
       { text: config.cache_enabled ? '缓存已启用' : '缓存已关闭', tone: config.cache_enabled ? 'muted' : 'warn', title: '审核缓存状态' },
-      { text: config.gate_enabled ? '门控已启用' : '门控已关闭', tone: config.gate_enabled ? 'muted' : 'off', title: config.gate_enabled ? ('门控模型 ' + (config.gate_model || '') + ' · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)) : '未开启低成本门控' }
+      { text: config.gate_enabled ? '门控已启用' : '门控已关闭', tone: config.gate_enabled ? 'muted' : 'off', title: config.gate_enabled ? ('门控模型 ' + (config.gate_model || '') + ' · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)) : '未开启低成本门控' },
+      ...(config.dataset_enabled
+        ? [{ text: '留存prompt 已开启', tone: 'warn', title: '正在把图片 base64、提示词与模型返回落盘为微调数据集' }]
+        : [])
     ];
     container.innerHTML = pills.map(pill =>
       '<span class="meta-pill" data-tone="' + pill.tone + '" title="' + esc(pill.title) + '">' + esc(pill.text) + '</span>'

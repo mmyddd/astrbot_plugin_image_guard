@@ -244,6 +244,15 @@
     },
     systemoneTest(payload) {
       return api.post('audit/systemone/test', payload || {});
+    },
+    dataset() {
+      return api.get('audit/dataset');
+    },
+    datasetExport(format, limit) {
+      return api.post('audit/dataset/export', { format: format, limit: limit || 0 });
+    },
+    datasetClear() {
+      return api.post('audit/dataset/clear', {});
     }
   };
 

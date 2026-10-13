@@ -313,5 +313,41 @@
     "type": "string",
     "default": "",
     "hint": "留空表示与视觉大模型共用同一份引导词"
+  },
+  "dataset_capture_enabled": {
+    "description": "留存prompt（微调数据集）。开启后把每次送审的图片 base64、完整提示词与模型返回落盘，模型给出的 TAGS 会作为标注一并保存，供本地模型微调使用。关闭时不创建任何目录与文件，插件行为与没有该功能时完全一致。注意：留存的图片与提示词会长期占用磁盘，且包含用户图片内容，请自行确保存储安全。",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；开启后建议定期导出并清理，避免磁盘写满"
+  },
+  "dataset_dir": {
+    "description": "数据集存储目录。留空使用默认目录 data/plugin_data/image_guard/dataset，该目录下会生成 samples.jsonl（含 base64 图片与 prompt）、responses.jsonl（模型返回与标签）、images/（解码后的图片）与 export/（导出产物）。",
+    "type": "string",
+    "default": "",
+    "hint": "相对路径按 AstrBot 工作目录解析；留空即用默认值"
+  },
+  "dataset_max_samples": {
+    "description": "数据集最多留存的样本条数。达到上限后停止留存而不是淘汰旧样本——旧样本可能还没导出，直接丢弃等于静默丢数据。",
+    "type": "int",
+    "default": 2000,
+    "hint": "填 0 表示不限制（不推荐，容易把磁盘写满）"
+  },
+  "dataset_max_image_mb": {
+    "description": "单张送审图片的留存上限（MB）。超过上限的图片只记录尺寸与摘要，不保存 base64 与图片文件，避免单张超大图把样本文件撑爆。",
+    "type": "int",
+    "default": 8,
+    "hint": "送审图已按 compressed_image_max_bytes 压缩过，默认 8MB 足够"
+  },
+  "dataset_min_free_mb": {
+    "description": "磁盘余量下限（MB）。剩余空间低于该值时自动暂停留存并在日志中告警，避免写满磁盘导致 AstrBot 整体异常。",
+    "type": "int",
+    "default": 512,
+    "hint": "填 0 表示不做磁盘保护"
+  },
+  "dataset_capture_raw_response": {
+    "description": "是否额外保存模型接口的原始响应 JSON（含 token 用量等元信息）。数据更全但体积更大，仅在需要排查供应商返回结构时开启。",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭，只保存解析后的文本、标签与判定结果"
   }
 }

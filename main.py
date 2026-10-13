@@ -18,6 +18,7 @@ from .image_processor import (
     _save_compressed_image_to_temp,
     _resolve_compressed_image_temp_dir,
 )
+from .dataset_recorder import DatasetRecorder
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -51,6 +52,9 @@ TOP_LEVEL_SECRET_FIELDS = ("systemone_api_key",)
 字段名，后者是插件配置顶层的键名。混用会让掩码回填判断永远为假，
 页面保存时把八颗星当成明文写回配置，Key 随之静默失效。
 """
+
+DATASET_PREVIEW_LIMIT = 50
+"""数据集页面一次预览的样本条数上限，避免把整个数据集塞进接口响应。"""
 
 PENDING_TTL_SECONDS = 900
 """单条“处理中”任务的最大存活时间，超时视为异常残留并被清理。"""
@@ -192,6 +196,7 @@ _EDITABLE_TEXT_FIELDS = (
     "systemone_vision_prompt",
     # systemone_api_key 也走这里，保存前必须先做掩码回填（见 _api_audit_config_update）
     "systemone_api_key",
+    "dataset_dir",
 )
 _EDITABLE_DICT_LIST_FIELDS = ("group_report_targets",)
 _EDITABLE_BOOL_FIELDS = (
@@ -200,6 +205,8 @@ _EDITABLE_BOOL_FIELDS = (
     "keep_compressed_image_in_temp",
     "debug_log_llm_response",
     "systemone_enabled",
+    "dataset_capture_enabled",
+    "dataset_capture_raw_response",
 )
 _EDITABLE_INT_FIELDS = (
     "llm_max_tokens",
@@ -209,6 +216,9 @@ _EDITABLE_INT_FIELDS = (
     "audit_cache_threshold",
     "audit_cache_max_entries",
     "systemone_max_image_bytes",
+    "dataset_max_samples",
+    "dataset_max_image_mb",
+    "dataset_min_free_mb",
 )
 _EDITABLE_FLOAT_FIELDS = (
     "llm_timeout_seconds",
@@ -354,7 +364,7 @@ def _make_probe_image() -> bytes:
     return buffer.getvalue()
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.12.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.13.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -369,6 +379,9 @@ class ImageGuard(Star):
             threshold=cache_threshold, max_entries=cache_max_entries
         )
         self._audit_cache_loaded = False
+
+        # ── 数据集留存（留存prompt 开关；关闭时全程 no-op）──
+        self._dataset = DatasetRecorder(config)
 
         # ── 处理中的审核任务（仅内存，不持久化；命中违规才写入历史）──
         self._pending_audits: dict[str, dict] = {}
@@ -440,6 +453,24 @@ class ImageGuard(Star):
             self._api_audit_storage_prune,
             ["POST", "DELETE"],
             "清理没有对应记录的本地图片",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/dataset",
+            self._api_audit_dataset,
+            ["GET"],
+            "获取数据集留存状态与样本预览",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/dataset/export",
+            self._api_audit_dataset_export,
+            ["POST"],
+            "导出数据集",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/dataset/clear",
+            self._api_audit_dataset_clear,
+            ["POST", "DELETE"],
+            "清空留存的数据集",
         )
 
     # ── 运行统计（KV）──────────────────────────────────────
@@ -767,10 +798,26 @@ class ImageGuard(Star):
         await self._bump_audit_stats(audit_total=1)
         audit_started_at = time.time()
 
+        # ── 数据集留存（留存prompt 开启时）：调用模型前先落盘图片与提示词 ──
+        # 开关关闭时 _dataset.begin 直接返回 None，不建目录、不写文件。
+        # 留存是旁路功能，任何异常都不能影响审核本身。
+        dataset_id = None
+        try:
+            dataset_id = self._dataset.begin(
+                prompt,
+                image_urls,
+                group_id=group_id,
+                user_id=user_id,
+                user_name=event.get_sender_name() or "",
+                is_group=is_group,
+            )
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 数据集留存失败（请求侧），本次不留存: {e}")
+
         try:
             # v4.26+ 图片在提取时已压缩为 data URL，无需 prepare_audit_images 再次处理
             logger.info(f"[ImageGuard] 开始审核，共 {len(image_urls)} 张图片")
-            response_text = await self._call_audit_llm(prompt, image_urls)
+            response_text, used_provider, used_model = await self._call_audit_llm(prompt, image_urls)
             if self.config.get("debug_log_llm_response", False):
                 logger.info(f"[ImageGuard] LLM 返回内容: {response_text}")
 
@@ -800,6 +847,21 @@ class ImageGuard(Star):
             elif is_violation:
                 reason_str = response_text.split('\n')[0][:50]
 
+            # 模型返回已拿到：回填响应侧，标签直接作为数据集标注
+            try:
+                self._dataset.finish(
+                    dataset_id,
+                    text=response_text,
+                    tags=parsed_tags,
+                    label="violation" if is_violation else "safe",
+                    reason=reason_str,
+                    elapsed_ms=int(max(0.0, (time.time() - audit_started_at) * 1000)),
+                    provider=used_provider,
+                    model=used_model,
+                )
+            except Exception as e:
+                logger.warning(f"[ImageGuard] 数据集留存失败（响应侧）: {e}")
+
             # === 10. 判罚 ===
             elapsed_ms = await self._record_audit_duration(audit_started_at, is_violation)
             if is_violation:
@@ -826,6 +888,18 @@ class ImageGuard(Star):
             failed_ms = max(0.0, (time.time() - audit_started_at) * 1000)
             logger.error(f"[ImageGuard] Check failed ({failed_ms / 1000:.1f}s): {e}")
             await self._bump_audit_stats(audit_failed=1)
+            # 调用失败同样留痕：请求侧已经在调用前落盘，这里只补上失败原因，
+            # 避免半条样本无从判断是模型没回还是没来得及写。
+            try:
+                self._dataset.finish(
+                    dataset_id,
+                    text="",
+                    label="unknown",
+                    error=str(e),
+                    elapsed_ms=int(failed_ms),
+                )
+            except Exception as dataset_error:
+                logger.warning(f"[ImageGuard] 数据集留存失败（异常路径）: {dataset_error}")
         finally:
             self._pending_finish(pending_id)
 
@@ -906,30 +980,35 @@ class ImageGuard(Star):
 
     # ── 多供应商调用核心 ──────────────────────────────────────
 
-    async def _call_audit_llm(self, prompt: str, image_urls: list[str]) -> str:
+    async def _call_audit_llm(self, prompt: str, image_urls: list[str]) -> tuple[str, str, str]:
         """按 llm_providers 列表顺序依次尝试，第一个成功的即返回。
 
         列表中每个条目是一个"供应商"，由其 ``__template_key`` 字段区分类型：
         - ``openai_compatible``：通过 OpenAI 兼容 API 调用（需填写 api_key / base_url）
         - ``astrbot_provider``：复用 AstrBot 当前会话配置的 LLM Provider
+
+        Returns:
+            三元组（模型返回文本、命中的供应商别名、实际使用的模型名）。模型名供
+            数据集留存记录，便于区分同一批数据来自哪个模型。
         """
         providers = self.config.get("llm_providers", [])
         if not providers:
             logger.info("[ImageGuard] 未配置任何供应商，直接使用 AstrBot Provider")
             result = await self._call_astrbot_provider(prompt, image_urls)
             await self._track_provider_usage("AstrBot Provider (fallback)")
-            return result
+            return result, "AstrBot Provider (fallback)", ""
 
         last_exception = None
         for prov in providers:
             template = prov.get("__template_key", "")
             prov_name = prov.get("name", "Unknown")
+            model_name = str(prov.get("model") or "")
             try:
                 if template == "astrbot_provider":
                     logger.info(f"[ImageGuard] 尝试 AstrBot Provider「{prov_name}」...")
                     result = await self._call_astrbot_provider(prompt, image_urls)
                     await self._track_provider_usage(prov_name)
-                    return result
+                    return result, prov_name, model_name
 
                 else:
                     # 所有非 astrbot_provider 的模板（openai_compatible / modelscope 等）
@@ -940,7 +1019,7 @@ class ImageGuard(Star):
                         raise ValueError(f"「{prov_name}」返回内容为空")
                     logger.info(f"[ImageGuard] 供应商「{prov_name}」审核成功")
                     await self._track_provider_usage(prov_name)
-                    return result
+                    return result, prov_name, model_name
 
             except Exception as e:
                 last_exception = e
@@ -1409,6 +1488,7 @@ class ImageGuard(Star):
             ),
             "gate_model": str(self.config.get("systemone_model", "") or "cloudflare/clef-flash"),
             "skip_banned": _as_bool(self.config.get("skip_audit_for_banned", False)),
+            "dataset_enabled": _as_bool(self.config.get("dataset_capture_enabled", False)),
             "report_enabled": bool(str(self.config.get("report_target_id", "")).strip())
             or bool(_as_list(self.config.get("group_report_targets", []))),
         }
@@ -1432,6 +1512,13 @@ class ImageGuard(Star):
         except Exception as e:
             logger.warning(f"[ImageGuard] 配置保存失败: {e}")
             return False
+
+        # 开关可能在本次保存中被改写：立刻同步留存器，别等热重载完成才生效
+        # （热重载失败时也不会漏掉，避免出现"关了还在写"的窗口）
+        try:
+            self._dataset.refresh(config_obj)
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 数据集留存器刷新失败: {e}")
 
         try:
             if hasattr(self.context, "reload_plugin"):
@@ -1722,6 +1809,90 @@ class ImageGuard(Star):
         except Exception as e:
             logger.error(f"[ImageGuard] 清理本地图片失败: {e}")
             return {"message": f"prune failed: {e}"}, 500
+
+    # ── 数据集留存 API ──────────────────────────────────────────
+
+    async def _api_audit_dataset(self) -> dict:
+        """数据集状态 + 样本预览。
+
+        预览只返回图片路径与 base64 的长度/摘要，不回传 base64 正文：一条样本
+        动辄上百 KB，几十条就足以把接口响应撑成几 MB，页面只需要知道有没有。
+        """
+        if not self._dataset.enabled:
+            return {"enabled": False, "stats": {"enabled": False, "samples": 0}, "samples": [], "total": 0}
+
+        stats = self._dataset.stats()
+        preview: list[dict] = []
+        try:
+            # 只读末尾若干条：base64 内联在样本里，全量解析会把接口拖成秒级响应
+            merged = self._dataset.load_samples(limit=DATASET_PREVIEW_LIMIT)
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 读取数据集失败: {e}")
+            merged = []
+        total = int(stats.get("samples", len(merged)))
+        for item in merged:
+            sample = item.get("sample", {})
+            response = item.get("response", {})
+            request = sample.get("request", {})
+            images = []
+            for image in request.get("images", []) or []:
+                images.append(
+                    {
+                        "index": image.get("index"),
+                        "mime": image.get("mime", ""),
+                        "bytes": image.get("bytes", 0),
+                        "sha256": image.get("sha256", ""),
+                        "base64_bytes": len(str(image.get("base64") or "")),
+                        "path": image.get("path", ""),
+                        "missing_reason": image.get("missing_reason", ""),
+                    }
+                )
+            preview.append(
+                {
+                    "id": sample.get("id", ""),
+                    "created_at": sample.get("created_at", ""),
+                    "prompt": str(request.get("prompt") or "")[:600],
+                    "prompt_bytes": len(str(request.get("prompt") or "").encode("utf-8")),
+                    "images": images,
+                    "status": response.get("status", "pending"),
+                    "text": str(response.get("text") or "")[:600],
+                    "tags": response.get("tags") or [],
+                    "label": response.get("label", "unknown"),
+                    "reason": response.get("reason", ""),
+                    "error": response.get("error", ""),
+                    "elapsed_ms": response.get("elapsed_ms"),
+                    "provider": response.get("provider") or request.get("provider", ""),
+                    "model": response.get("model") or request.get("model", ""),
+                }
+            )
+        return {
+            "enabled": True,
+            "stats": stats,
+            "samples": preview,
+            "total": total,
+            "preview_limit": DATASET_PREVIEW_LIMIT,
+            "truncated": total > len(preview),
+            "formats": ["openai", "sharegpt", "raw"],
+        }
+
+    async def _api_audit_dataset_export(self):
+        """按指定格式导出数据集到 <dataset_dir>/export/ 下。"""
+        from quart import request
+
+        payload = await request.get_json(silent=True) or {}
+        fmt = str(payload.get("format") or "openai").strip().lower()
+        limit = _as_int(payload.get("limit", 0), 0)
+        result = self._dataset.export(fmt, limit=max(0, limit))
+        if not result.get("ok"):
+            return {"ok": False, "message": result.get("message", "导出失败")}, 400
+        return result
+
+    async def _api_audit_dataset_clear(self):
+        """清空已留存的样本与图片，已导出的产物保留。"""
+        if not self._dataset.enabled:
+            return {"ok": False, "message": "留存prompt 未开启，没有可清理的数据"}, 400
+        removed = self._dataset.clear()
+        return {"ok": True, "removed": removed.get("removed", 0)}
 
     # ── 生命周期 ────────────────────────────────────────────────
 
