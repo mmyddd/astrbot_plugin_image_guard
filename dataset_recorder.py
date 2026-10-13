@@ -43,10 +43,17 @@
       "recorded_at": "...", "raw": null
     }
 
-导出（`export`）只取成功且返回非空的样本，写成一行一条的 OpenAI messages：
-`system` 放完整审核规则，`user` 放固定指令与内联 base64 图片，`assistant` 放
-`REASON/RESULT/TAGS` 三行判定。标签等元信息写在逐行对齐的 labels.jsonl 侧车，
-训练时不读它。
+导出（`export`）只取成功且返回非空的样本，写成一行一条的多模态 sharegpt：
+`conversations` 里 human 放固定指令加 `<image>` 占位、gpt 放 `REASON/RESULT/TAGS`
+三行判定，`system` 放完整审核规则，`images` 列放图片相对路径。图片同时复制进
+导出目录的 images/，这样导出产物可以整体搬走、不依赖留存目录还在不在。
+
+没有采用 OpenAI 的 messages/image_url 结构：那是接口请求体而非训练格式，
+LLaMA-Factory 的 mm_plugin 里根本没有 image_url 这个字面量，图片只能走独立的
+images 列并按文件路径解析。sharegpt + images 列是 LLaMA-Factory 与 ms-swift
+都能直接读的通用结构；unsloth 需要按官方示例做几行 map 转换。
+
+标签等元信息写在逐行对齐的 labels.jsonl 侧车，训练时不读它。
 """
 
 from __future__ import annotations
@@ -75,7 +82,16 @@ DEFAULT_DATASET_DIR = Path("data") / "plugin_data" / "image_guard" / "dataset"
 """默认存储根目录，与审核图片目录同级，便于一起备份或清理。"""
 
 DATASET_FILE = "dataset.jsonl"
-"""导出产物：一行一条训练样本（system + user 图片 + assistant 判定）。"""
+"""导出产物：一行一条训练样本（conversations + system + images 路径列）。"""
+
+INFO_FILE = "dataset_info.json"
+"""导出产物：框架注册文件，LLaMA-Factory 据此解析 dataset.jsonl。"""
+
+DATASET_FORMAT = "sharegpt"
+"""导出结构：多模态 sharegpt，LLaMA-Factory 与 ms-swift 原生支持。"""
+
+IMAGE_GUARD_DATASET = "image_guard"
+"""dataset_info.json 里的数据集名，训练时 dataset=image_guard 即可。"""
 
 LABELS_FILE = "labels.jsonl"
 """导出产物：与 dataset.jsonl 逐行对齐的标注侧车，仅用于筛选正负样本。"""
@@ -92,10 +108,20 @@ EXPORT_DIR_NAME = "export"
 SCHEMA_VERSION = 1
 """样本字段结构版本号；字段变更时递增，导出侧据此做兼容。"""
 
-EXPORT_FORMATS = ("openai",)
-"""唯一的导出格式：system 放规则、user 放指令与图片、assistant 放判定的 JSONL。"""
+EXPORT_FORMATS = ("sharegpt",)
+"""唯一的导出格式：多模态 sharegpt（conversations 占位符 + images 路径列）。
 
-FORMAT_ALIASES = {"sft": "openai", "sharegpt": "openai", "raw": "openai"}
+不用 OpenAI 的 messages/image_url 结构：那是接口请求体，不是训练格式。
+LLaMA-Factory 的 mm_plugin 里没有 image_url 这个字面量，图片只能走独立的
+images 列并按文件路径解析；unsloth 的图片字段名是 image 也不是 image_url。
+sharegpt + images 路径列同时被 LLaMA-Factory 与 ms-swift 原生支持。"""
+
+FORMAT_ALIASES = {
+    "sft": "sharegpt",
+    "openai": "sharegpt",
+    "raw": "sharegpt",
+    "sharegpt": "sharegpt",
+}
 """历史格式名统一收敛到现格式，避免旧页面缓存把导出请求打回 400。"""
 
 USER_INSTRUCTION = "请按要求分析这张图片。"
@@ -588,15 +614,19 @@ class DatasetRecorder:
     # ── 导出 ──────────────────────────────────────────────────
 
     @staticmethod
-    def _data_urls(sample: dict) -> list[str]:
-        """还原送审时的 data URL，供标准 OpenAI 消息内联图片。"""
-        urls: list[str] = []
-        for item in sample.get("request", {}).get("images", []):
-            payload = str(item.get("base64") or "")
-            if not payload:
-                continue
-            urls.append(f"data:{item.get('mime') or 'image/jpeg'};base64,{payload}")
-        return urls
+    def _image_files(sample: dict) -> list[str]:
+        """样本里已落盘的图片路径（相对数据集根目录）。
+
+        导出格式不是 OpenAI 的请求体，而是训练框架真正吃得下的通用结构：图片单独
+        一列给路径，文本里用 <image> 占位。LLaMA-Factory 的 _find_medias() 会把
+        路径拼到 media_dir 下按文件是否存在来解析，所以必须是真实文件而不是
+        base64 内联——data URL 在这里既不会被识别，也会把文件撑得很大。
+        """
+        return [
+            str(item.get("path") or "")
+            for item in sample.get("request", {}).get("images", [])
+            if item.get("path")
+        ]
 
     @staticmethod
     def _target_text(response: dict) -> str:
@@ -612,22 +642,34 @@ class DatasetRecorder:
             f"TAGS: {json.dumps(tags, ensure_ascii=False)}"
         )
 
-    def _openai_record(self, sample: dict, response: dict) -> dict:
-        """导出样本：system 放完整审核规则，user 放固定指令与图片。
+    def _dataset_record(self, sample: dict, response: dict, images: list[str] | None = None) -> dict:
+        """通用多模态训练样本：LLaMA-Factory 与 ms-swift 可直接读取。
 
-        记录里只有 messages 一个键，训练文件保持干净的 OpenAI 结构；标签、模型
-        等元信息另写 labels.jsonl 侧车，按 id 对齐，筛选正负样本时读侧车即可。
+        - `conversations`：human / gpt 轮流，图片位置写 `<image>` 占位符，
+          数量必须与 `images` 列严格相等（训练框架据此对齐图与文本）；
+        - `images`：图片文件路径，相对数据集根目录，配合 media_dir 解析；
+        - `system`：完整审核规则，会作为 system 轮次参与训练。
+
+        规则放 system、指令放 human：模型学的是"按 system 的规则判图"，换一套违规
+        标准只改 system 即可复用同一个模型。
+
+        unsloth 不直接读这个结构（它的 vision 示例用 messages 内容分块
+        `{"type":"image","image":<路径或PIL>}`），按官方文档几行 map 即可转换；
+        这里选择 sharegpt 是因为它同时被 LLaMA-Factory 与 ms-swift 原生支持。
         """
         request = sample.get("request", {})
-        content: list[dict] = [{"type": "text", "text": USER_INSTRUCTION}]
-        for url in self._data_urls(sample):
-            content.append({"type": "image_url", "image_url": {"url": url}})
+        if images is None:
+            images = self._image_files(sample)
+        # 占位符数量必须与 images 列严格相等，训练框架据此对齐图与文本；
+        # 图片位放在句首是 LLaMA-Factory 官方示例的写法（"<image>user instruction"）
+        value = "".join(["<image>"] * len(images)) + USER_INSTRUCTION
         return {
-            "messages": [
-                {"role": "system", "content": request.get("prompt", "")},
-                {"role": "user", "content": content},
-                {"role": "assistant", "content": self._target_text(response)},
-            ]
+            "conversations": [
+                {"from": "human", "value": value},
+                {"from": "gpt", "value": self._target_text(response)},
+            ],
+            "system": request.get("prompt", ""),
+            "images": images,
         }
 
     @staticmethod
@@ -671,6 +713,19 @@ class DatasetRecorder:
                 ),
             }
 
+        # 训练框架要求 <image> 占位与 images 列一一对应，没有图片的样本进数据集
+        # 只会教模型不看图作答；全都没有图时直接报错，不留下空的导出目录。
+        with_image = [item for item in usable if self._image_files(item["sample"])]
+        skipped_no_image = len(usable) - len(with_image)
+        if not with_image:
+            return {
+                "ok": False,
+                "message": (
+                    f"没有可导出的样本：{total} 条留存记录里没有一条同时具备成功状态、"
+                    "非空模型返回与图片内容"
+                ),
+            }
+
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = self._root / EXPORT_DIR_NAME / stamp
         try:
@@ -679,31 +734,57 @@ class DatasetRecorder:
             return {"ok": False, "message": f"创建导出目录失败：{error}"}
 
         files: list[str] = []
+        exported: list[dict] = []
+        missing_file = 0
         try:
-            # 训练文件：一行一条 messages，图片内联 base64
+            # 先复制图片并筛掉没有图片内容的样本：视觉微调样本没有图，等于教模型
+            # 不看图作答，留在数据集里只会损害效果。
+            prepared: list[tuple[dict, list[str]]] = []
+            for item in with_image:
+                paths = self._export_images(item["sample"], target)
+                if not paths:
+                    # 记录里有路径，但文件已经不在磁盘上（被清理过）
+                    missing_file += 1
+                    continue
+                prepared.append((item, paths))
+                exported.append(item)
+
+            # 训练文件：一行一条样本，图片走独立的 images 列（路径），文本里留 <image> 占位
             with (target / DATASET_FILE).open("w", encoding="utf-8") as handle:
-                for item in usable:
-                    record = self._openai_record(item["sample"], item["response"])
+                for item, paths in prepared:
+                    record = self._dataset_record(item["sample"], item["response"], paths)
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             files.append(DATASET_FILE)
 
             # 标注侧车：与训练文件逐行对齐，供筛选正负样本，训练时不需要
             with (target / LABELS_FILE).open("w", encoding="utf-8") as handle:
-                for item in usable:
+                for item, _ in prepared:
                     label = self._label_record(item["sample"], item["response"])
                     handle.write(json.dumps(label, ensure_ascii=False) + "\n")
             files.append(LABELS_FILE)
+
+            # 框架注册文件：把导出目录当 dataset_dir 即可直接训练
+            (target / INFO_FILE).write_text(
+                json.dumps(self._dataset_info(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            files.append(INFO_FILE)
         except OSError as error:
             return {"ok": False, "message": f"写导出文件失败：{error}"}
 
         manifest = {
             "exported_at": _iso_now(),
-            "format": "jsonl",
-            "samples": len(usable),
+            "format": DATASET_FORMAT,
+            "samples": len(exported),
             "skipped_unusable": skipped,
-            "with_image": sum(1 for item in usable if self._data_urls(item["sample"])),
-            "label_violation": sum(1 for item in usable if item["response"].get("label") == "violation"),
-            "label_safe": sum(1 for item in usable if item["response"].get("label") == "safe"),
+            "skipped_no_image": skipped_no_image,
+            "skipped_missing_file": missing_file,
+            "label_violation": sum(
+                1 for item in exported if item["response"].get("label") == "violation"
+            ),
+            "label_safe": sum(
+                1 for item in exported if item["response"].get("label") == "safe"
+            ),
             "source_dir": str(self._root),
             "files": files,
         }
@@ -713,10 +794,68 @@ class DatasetRecorder:
             )
         except OSError:
             pass
-        message = f"导出完成，共 {len(usable)} 条成功样本"
+        message = f"导出完成，共 {len(exported)} 条样本"
+        notes = []
         if skipped:
-            message += f"（已跳过 {skipped} 条失败/空返回记录）"
+            notes.append(f"跳过 {skipped} 条失败/空返回")
+        if skipped_no_image:
+            notes.append(f"跳过 {skipped_no_image} 条无图片内容")
+        if missing_file:
+            notes.append(f"跳过 {missing_file} 条图片文件已丢失")
+        if notes:
+            message += "（已" + "、".join(notes) + "）"
         return {"ok": True, "message": message, "dir": str(target), "manifest": manifest}
+
+    def _export_images(self, sample: dict, target: Path) -> list[str]:
+        """把样本图片复制进导出目录，返回相对导出目录的路径。
+
+        导出必须自包含：留存目录随时可能被"清空留存"删掉，训练时再去引用原路径
+        会直接读不到图。复制一份的代价是磁盘，换来的是导出目录可以整体搬走。
+        """
+        result: list[str] = []
+        sample_id = str(sample.get("id") or "sample")
+        try:
+            (target / IMAGES_DIR_NAME).mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            logger.warning(f"[ImageGuard] 创建导出图片目录失败: {error}")
+            return result
+        for index, item in enumerate(sample.get("request", {}).get("images", []) or []):
+            relative = str(item.get("path") or "")
+            if not relative:
+                continue
+            source = self._root / relative
+            if not source.is_file():
+                continue
+            extension = image_extension(item.get("mime", ""), index + 1)
+            name = f"{sample_id}_{index + 1}{extension}"
+            try:
+                shutil.copyfile(source, target / IMAGES_DIR_NAME / name)
+            except OSError as error:
+                logger.warning(f"[ImageGuard] 导出图片失败 {source}: {error}")
+                continue
+            result.append(f"{IMAGES_DIR_NAME}/{name}")
+        return result
+
+    @staticmethod
+    def _dataset_info() -> dict:
+        """框架注册文件：LLaMA-Factory 读 dataset_info.json 才知道怎么解析本文件。"""
+        return {
+            IMAGE_GUARD_DATASET: {
+                "file_name": DATASET_FILE,
+                "formatting": "sharegpt",
+                "columns": {
+                    "messages": "conversations",
+                    "system": "system",
+                    "images": "images",
+                },
+                "tags": {
+                    "role_tag": "from",
+                    "content_tag": "value",
+                    "user_tag": "human",
+                    "assistant_tag": "gpt",
+                },
+            }
+        }
 
     # ── 清理 ──────────────────────────────────────────────────
 

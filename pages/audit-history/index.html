@@ -728,9 +728,11 @@
 
                 <div class="dataset-export">
                   <p class="dataset-format-note">
-                    导出产物为 <code>dataset.jsonl</code>：一行一条样本，<code>system</code> 放完整审核规则，
-                    <code>user</code> 放固定指令与图片，<code>assistant</code> 放 <code>REASON/RESULT/TAGS</code> 三行判定。
-                    同目录的 <code>labels.jsonl</code> 是逐行对齐的标注侧车，仅供筛选正负样本。
+                    导出产物为多模态 <code>sharegpt</code> 格式：<code>dataset.jsonl</code> 一行一条样本，
+                    <code>conversations</code> 里 human 放指令与 <code>&lt;image&gt;</code> 占位、gpt 放
+                    <code>REASON/RESULT/TAGS</code> 三行判定，<code>system</code> 放完整审核规则，
+                    <code>images</code> 列放图片相对路径，图片同时复制进 <code>images/</code> 目录。
+                    <code>dataset_info.json</code> 是 LLaMA-Factory 注册文件，<code>labels.jsonl</code> 是逐行对齐的标注侧车。
                   </p>
                   <div class="dataset-export-actions">
                     <button class="btn btn-tonal" type="button" id="dataset-export">导出数据集</button>

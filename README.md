@@ -196,27 +196,48 @@ dataset/
 
 | 文件 | 用途 |
 | :--- | :--- |
-| `dataset.jsonl` | 训练文件。一行一条样本，就是 OpenAI chat 的 `messages` |
+| `dataset.jsonl` | 训练文件。一行一条样本，多模态 sharegpt 结构 |
+| `images/` | 样本图片。**导出时从留存目录复制过来**，导出产物可以整体搬走 |
+| `dataset_info.json` | LLaMA-Factory 注册文件，说明各列怎么解析 |
 | `labels.jsonl` | 标注侧车。与训练文件逐行对齐，按 `id` 关联，仅供筛选正负样本 |
-| `manifest.json` | 本次导出的条数、跳过的不可用条数、含图条数与正负样本分布 |
+| `manifest.json` | 本次导出的条数、跳过的条数与正负样本分布 |
 
-`dataset.jsonl` 一行一条，`system` 放完整审核规则、`user` 放固定指令与图片、`assistant` 放三行判定（下例为便于阅读做了换行与缩进，实际一行一条）：
+`dataset.jsonl` 一行一条（下例为便于阅读做了换行与缩进，实际一行一条）：
 
 ```json
-{"messages":[
-  {"role":"system","content":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"},
-  {"role":"user","content":[{"type":"text","text":"请按要求分析这张图片。"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQ..."}}]},
-  {"role":"assistant","content":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}
-]}
+{"conversations":[{"from":"human","value":"<image>请按要求分析这张图片。"},{"from":"gpt","value":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}],"system":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n","images":["images/20261013-235253-629fd0_1.jpg"]}
 ```
 
-记忆点：**规则在 system，指令在 user，判定在 assistant**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，而不是把规则当成一次性用户输入背下来——推理时换一套违规标准只改 system 即可复用同一个模型。
+记忆点：**规则在 system，指令在 human，判定在 gpt**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，换一套违规标准只改 system 即可复用同一个模型。
 
-> 插件运行时是把规则和图片塞在同一条 user 消息里发给供应商的；导出时拆到 system，是为了让微调后的模型行为更稳。两者对模型的语义等价，替换现有供应商不需要改插件提示词。
+### 为什么不用 OpenAI 的 messages 结构
 
-**只有调用成功且返回非空的样本会进入数据集。** 失败、返回为空、以及只落盘了请求侧的在途记录都留在磁盘上供排查，但页面不显示、统计不计数、导出也不包含——它们没有可学习的监督目标，混进去只会教模型输出空串。页面的「数据集样本」数与导出口径完全一致，另有独立提示说明被排除了多少条。
+OpenAI 的 `messages` + `content[].image_url` 是**接口请求体**格式，不是训练格式：
 
-> `labels.jsonl` 只是为了让你筛选样本时不必解析训练文件。**训练时忽略它**：把 `dataset.jsonl` 交给训练框架即可，多一个文件不会被读取。
+| 框架 | 图片怎么给 | 认 image_url 吗 |
+| :--- | :--- | :--- |
+| LLaMA-Factory | 独立的 `images` 列，值是**文件路径**，按 `media_dir` 拼路径后用 `os.path.isfile` 校验 | ❌ `mm_plugin.py` 里没有 `image_url` 这个字面量，content 里的图片不会被解析 |
+| ms-swift | 标准键 `messages` / `images`，图片列放**路径或 URL** | ❌ 只认自己的 content block 规范 |
+| unsloth | `messages` 内容分块 `{"type":"image","image":<路径或PIL对象>}` | ❌ 字段名是 `image` 不是 `image_url`，需要几行 map 转换 |
+
+所以导出改用 **sharegpt + `images` 路径列**——这是 LLaMA-Factory 与 ms-swift 都原生支持的通用结构（LLaMA-Factory 声明 `formatting` 取值就是 `{alpaca, sharegpt, openai}`，其中多模态只认 `images` 列）。
+
+**训练命令（LLaMA-Factory）**：把导出目录当作 `dataset_dir`，图片和 `dataset_info.json` 已在里面：
+
+```bash
+llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml \
+  dataset_dir <导出目录> \
+  dataset image_guard \
+  media_dir <导出目录>
+```
+
+> unsloth 需要一步转换：把 `conversations` 映射成 `messages`、`{"from":"human","value":"<image>…"}` 拆成 `{"type":"text"}` 与 `{"type":"image","image":<路径>}` 两个分块。官方 vision 微调文档里有对应的 `convert_to_conversation` 示例，十几行代码。选 sharegpt 是因为它被两个主流框架原生支持，覆盖面更广。
+
+> 插件运行时是把规则和图片塞在同一条 user 消息里发给供应商的；导出时把规则拆到 system，是为了让微调后的模型行为更稳。两者对模型语义等价，替换现有供应商不需要改插件提示词。
+
+**只有调用成功、返回非空且带图片的样本会进入数据集。** 失败、返回为空、在途记录、以及没有图片内容的样本都留在磁盘上供排查，但不进数据集——前三种没有监督目标，最后一种会教模型不看图作答。页面的「数据集样本」数与导出口径完全一致，另有独立提示说明被排除了多少条。
+
+> `labels.jsonl` 只是为了让你筛选样本时不必解析训练文件。**训练时忽略它**。
 
 > ⚠️ 留存的数据包含用户图片与提示词，属于敏感内容：目录会长期占用磁盘，请自行确保存储安全，并定期导出后清理。数据集只用于本地模型微调，请遵守你所在地区关于数据留存与个人信息的法律要求。
 
@@ -233,7 +254,7 @@ dataset/
 * **审核白名单**：配置中心的「范围与处置」可维护白名单用户；名单内用户发送的图片**既不审核也不记录**，群聊与私聊均生效，概览顶栏会显示白名单人数。
 * **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
 * **配置中心**：七个分组标签页（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据集留存）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
-* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为 OpenAI messages 结构的 dataset.jsonl（含逐行对齐的标注侧车），以及清空留存（已导出的产物保留）。
+* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为多模态 sharegpt 结构的 dataset.jsonl（图片与 LLaMA-Factory 注册文件一并复制，导出目录可整体搬走），以及清空留存（已导出的产物保留）。
 * **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
 * **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
 

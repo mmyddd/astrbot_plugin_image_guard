@@ -985,11 +985,14 @@
     try {
       const result = await IG.api.datasetExport(0);
       const manifest = result.manifest || {};
+      const skipped = [];
+      if (manifest.skipped_unusable) skipped.push(format.int(manifest.skipped_unusable) + ' 条失败或空返回');
+      if (manifest.skipped_no_image) skipped.push(format.int(manifest.skipped_no_image) + ' 条无图片内容');
+      if (manifest.skipped_missing_file) skipped.push(format.int(manifest.skipped_missing_file) + ' 条图片文件已丢失');
       setDatasetNote(
-        '导出完成：' + format.int(manifest.samples || 0) + ' 条成功样本 → ' + (result.dir || '') +
-        '（含图片 ' + format.int(manifest.with_image || 0) + ' 条，违规 ' +
-        format.int(manifest.label_violation || 0) + ' / 安全 ' + format.int(manifest.label_safe || 0) + '）' +
-        (manifest.skipped_unusable ? '；已跳过 ' + format.int(manifest.skipped_unusable) + ' 条失败或空返回记录' : ''),
+        '导出完成：' + format.int(manifest.samples || 0) + ' 条样本 → ' + (result.dir || '') +
+        '（违规 ' + format.int(manifest.label_violation || 0) + ' / 安全 ' + format.int(manifest.label_safe || 0) + '）' +
+        (skipped.length ? '；已跳过 ' + skipped.join('、') : ''),
         'success'
       );
       toast('数据集已导出到 ' + (result.dir || ''), 'success');
