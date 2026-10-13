@@ -687,6 +687,8 @@ svg { display: block; width: 100%; height: 100%; }
 .dataset-status[data-state="success"] { border-color: color-mix(in srgb, var(--success) 30%, var(--line)); background: var(--success-soft); color: var(--success); }
 .dataset-export { display: grid; gap: 12px; padding-top: 4px; border-top: 1px solid var(--line); }
 .dataset-export-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dataset-format-note { margin: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.7; }
+.dataset-format-note code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 10.5px; padding: 0 4px; border-radius: 4px; background: var(--card-sunken); }
 .dataset-note { margin: 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--card-sunken); color: var(--text-2); font-size: 11.5px; line-height: 1.6; word-break: break-all; }
 .dataset-note[data-state="success"] { background: var(--success-soft); color: var(--success); }
 .dataset-note[data-state="error"] { background: var(--danger-soft); color: var(--danger); }

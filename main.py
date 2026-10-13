@@ -18,7 +18,7 @@ from .image_processor import (
     _save_compressed_image_to_temp,
     _resolve_compressed_image_temp_dir,
 )
-from .dataset_recorder import DatasetRecorder
+from .dataset_recorder import EXPORT_FORMATS, DatasetRecorder
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -1876,17 +1876,16 @@ class ImageGuard(Star):
             "excluded": int(stats.get("excluded", 0)),
             "preview_limit": DATASET_PREVIEW_LIMIT,
             "truncated": usable > len(preview),
-            "formats": ["openai", "sharegpt", "raw"],
+            "formats": list(EXPORT_FORMATS),
         }
 
     async def _api_audit_dataset_export(self):
-        """按指定格式导出数据集到 <dataset_dir>/export/ 下。"""
+        """导出数据集到 <dataset_dir>/export/<时间戳>/ 下（仅 JSONL 格式）。"""
         from quart import request
 
         payload = await request.get_json(silent=True) or {}
-        fmt = str(payload.get("format") or "openai").strip().lower()
         limit = _as_int(payload.get("limit", 0), 0)
-        result = self._dataset.export(fmt, limit=max(0, limit))
+        result = self._dataset.export(limit=max(0, limit))
         if not result.get("ok"):
             return {"ok": False, "message": result.get("message", "导出失败")}, 400
         return result

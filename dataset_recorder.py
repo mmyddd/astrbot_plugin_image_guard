@@ -6,9 +6,14 @@
 
 落盘布局（`dataset_dir`，默认 data/plugin_data/image_guard/dataset）::
 
-    samples.jsonl                  每条样本一行，含 base64 图片与完整 prompt
+    samples.jsonl                  请求侧：每条样本一行，含 base64 图片与完整 prompt
+    responses.jsonl                响应侧：每条样本一行，含模型返回、标签与判定
     images/<sample_id>/img_1.jpg   解码后的图片文件，训练框架可直接读取
-    export/<格式>-<时间戳>/         openai.json / sharegpt.json / samples.jsonl
+    export/<时间戳>/                dataset.jsonl / labels.jsonl / manifest.json
+
+`samples.jsonl` 与 `responses.jsonl` 用同一条 `id` 关联，拆两份是为了对齐记录
+时机：调用前写请求侧，返回后写响应侧。进程在中途挂掉时请求侧已经落盘，不会整条
+丢失，那条样本会以 `status: pending` 出现在页面的"未纳入"计数里。
 
 `samples.jsonl` 每行的字段结构::
 
@@ -19,24 +24,29 @@
       "source": {"group_id": "", "user_id": "", "user_name": "", "is_group": false},
       "request": {
         "prompt": "完整提示词",
-        "provider": "供应商别名", "model": "模型名",
         "image_count": 1,
         "images": [
           {"index": 1, "mime": "image/jpeg", "base64": "...", "bytes": 12345,
            "sha256": "...", "path": "images/<id>/img_1.jpg", "missing_reason": ""}
         ]
-      },
-      "response": {
-        "status": "pending|ok|failed",
-        "text": "模型返回原文", "tags": ["标签"], "label": "violation|safe|unknown",
-        "reason": "判定理由", "error": "", "elapsed_ms": 1234,
-        "recorded_at": "...", "raw": null
       }
     }
 
-记录时机：`begin` 在调用模型前落盘 request（图片先解码成文件，base64 内联进
-JSONL），`finish` 在调用返回后回填 response。进程在中途挂掉时，请求侧已经落盘，
-不会整条丢失。
+`responses.jsonl` 每行的字段结构::
+
+    {
+      "id": "20261013-224912-a1b2c3",   # 与 samples.jsonl 对齐
+      "status": "ok|failed",            # 只有 ok 且 text 非空才进数据集
+      "text": "模型返回原文", "tags": ["标签"], "label": "violation|safe|unknown",
+      "reason": "判定理由", "error": "", "elapsed_ms": 1234,
+      "provider": "供应商别名", "model": "模型名",
+      "recorded_at": "...", "raw": null
+    }
+
+导出（`export`）只取成功且返回非空的样本，写成一行一条的 OpenAI messages：
+`system` 放完整审核规则，`user` 放固定指令与内联 base64 图片，`assistant` 放
+`REASON/RESULT/TAGS` 三行判定。标签等元信息写在逐行对齐的 labels.jsonl 侧车，
+训练时不读它。
 """
 
 from __future__ import annotations
@@ -64,6 +74,12 @@ except ImportError:  # pragma: no cover - 仅在无 AstrBot 的环境触发
 DEFAULT_DATASET_DIR = Path("data") / "plugin_data" / "image_guard" / "dataset"
 """默认存储根目录，与审核图片目录同级，便于一起备份或清理。"""
 
+DATASET_FILE = "dataset.jsonl"
+"""导出产物：一行一条训练样本（system + user 图片 + assistant 判定）。"""
+
+LABELS_FILE = "labels.jsonl"
+"""导出产物：与 dataset.jsonl 逐行对齐的标注侧车，仅用于筛选正负样本。"""
+
 SAMPLES_FILE = "samples.jsonl"
 """样本主文件：一行一条 JSON，图片 base64 内联，便于整体搬运。"""
 
@@ -76,11 +92,18 @@ EXPORT_DIR_NAME = "export"
 SCHEMA_VERSION = 1
 """样本字段结构版本号；字段变更时递增，导出侧据此做兼容。"""
 
-EXPORT_FORMATS = ("openai", "sharegpt", "raw")
-"""导出格式：标准 OpenAI messages / ShareGPT 会话 / 原样拷贝。"""
+EXPORT_FORMATS = ("openai",)
+"""唯一的导出格式：system 放规则、user 放指令与图片、assistant 放判定的 JSONL。"""
 
-FORMAT_ALIASES = {"sft": "openai"}
-"""历史格式名到现名的映射，避免旧页面缓存把导出请求打回 400。"""
+FORMAT_ALIASES = {"sft": "openai", "sharegpt": "openai", "raw": "openai"}
+"""历史格式名统一收敛到现格式，避免旧页面缓存把导出请求打回 400。"""
+
+USER_INSTRUCTION = "请按要求分析这张图片。"
+"""导出样本里 user 消息的固定指令。
+
+审核规则整体放进 system，user 只留这一句加图片：规则与"看哪张图"解耦后，
+模型学到的是"按 system 的规则判图"，而不是把规则当成一次性用户输入背下来。
+"""
 
 DEFAULT_MAX_SAMPLES = 2000
 """默认样本条数上限，防止长期开启把磁盘写满。"""
@@ -565,14 +588,6 @@ class DatasetRecorder:
     # ── 导出 ──────────────────────────────────────────────────
 
     @staticmethod
-    def _image_paths(sample: dict) -> list[str]:
-        return [
-            str(item.get("path") or "")
-            for item in sample.get("request", {}).get("images", [])
-            if item.get("path")
-        ]
-
-    @staticmethod
     def _data_urls(sample: dict) -> list[str]:
         """还原送审时的 data URL，供标准 OpenAI 消息内联图片。"""
         urls: list[str] = []
@@ -598,43 +613,40 @@ class DatasetRecorder:
         )
 
     def _openai_record(self, sample: dict, response: dict) -> dict:
-        """标准 OpenAI chat.completions 结构：messages + content 分块 + image_url。
+        """导出样本：system 放完整审核规则，user 放固定指令与图片。
 
-        与插件真实发往接口的请求体同构（prompt 在前、图片随后），这样导出数据
-        与线上请求一致，微调后的模型可以直接替换现有供应商而不需要改提示词。
+        记录里只有 messages 一个键，训练文件保持干净的 OpenAI 结构；标签、模型
+        等元信息另写 labels.jsonl 侧车，按 id 对齐，筛选正负样本时读侧车即可。
         """
         request = sample.get("request", {})
-        content: list[dict] = [{"type": "text", "text": request.get("prompt", "")}]
+        content: list[dict] = [{"type": "text", "text": USER_INSTRUCTION}]
         for url in self._data_urls(sample):
             content.append({"type": "image_url", "image_url": {"url": url}})
         return {
             "messages": [
+                {"role": "system", "content": request.get("prompt", "")},
                 {"role": "user", "content": content},
                 {"role": "assistant", "content": self._target_text(response)},
-            ],
-            # 训练侧标注：不属于 OpenAI 字段，训练框架会忽略未知键
-            "label": response.get("label", "unknown"),
-            "tags": response.get("tags") or [],
-            "id": sample.get("id", ""),
+            ]
         }
 
-    def _sharegpt_record(self, sample: dict, response: dict) -> dict:
-        """ShareGPT 会话结构：图片走 LLaMA-Factory 的 images 路径列表。"""
-        request = sample.get("request", {})
+    @staticmethod
+    def _label_record(sample: dict, response: dict) -> dict:
+        """标注侧车：与 dataset.jsonl 同一行序，按 id 对齐，仅用于筛选与统计。"""
         return {
-            "conversations": [
-                {"from": "human", "value": request.get("prompt", "")},
-                {"from": "gpt", "value": self._target_text(response)},
-            ],
-            "images": self._image_paths(sample),
-            "system": "",
+            "id": sample.get("id", ""),
             "label": response.get("label", "unknown"),
             "tags": response.get("tags") or [],
-            "id": sample.get("id", ""),
+            "reason": response.get("reason", ""),
+            "provider": response.get("provider", ""),
+            "model": response.get("model", ""),
+            "elapsed_ms": response.get("elapsed_ms"),
+            "image_count": len(sample.get("request", {}).get("images", []) or []),
+            "created_at": sample.get("created_at", ""),
         }
 
-    def export(self, fmt: str = "sft", limit: int = 0) -> dict:
-        """导出数据集，返回产物路径与统计；未开启或没有样本时不写任何文件。
+    def export(self, limit: int = 0) -> dict:
+        """导出数据集（唯一格式：JSONL），返回产物路径与统计。
 
         只导出成功且模型返回非空的样本：失败与空返回的记录留在数据集目录里供
         排查，但不进数据集——它们没有监督目标，会污染微调结果。
@@ -643,7 +655,7 @@ class DatasetRecorder:
             return {"ok": False, "message": "留存prompt 未开启，没有可导出的数据集"}
         total = self.count_samples()
         if total <= 0:
-            return {"ok": False, "message": "数据集为空，先让插件跑几条审核再导出"}
+            return {"ok": False, "message": "数据集为空，先让插件跑几轮审核再导出"}
 
         # 只取成功且返回非空的样本：失败记录没有监督目标，会污染微调结果
         usable = self.load_samples(trainable_only=True)
@@ -658,13 +670,9 @@ class DatasetRecorder:
                     "同时具备成功状态与非空模型返回"
                 ),
             }
-        merged = usable
 
-        fmt = FORMAT_ALIASES.get(fmt, fmt)
-        if fmt not in EXPORT_FORMATS:
-            fmt = "openai"
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        target = self._root / EXPORT_DIR_NAME / f"{fmt}-{stamp}"
+        target = self._root / EXPORT_DIR_NAME / stamp
         try:
             target.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -672,46 +680,30 @@ class DatasetRecorder:
 
         files: list[str] = []
         try:
-            if fmt == "raw":
-                files.append(self._export_raw(target, merged))
-            else:
-                records = [
-                    self._openai_record(item["sample"], item["response"])
-                    if fmt == "openai"
-                    else self._sharegpt_record(item["sample"], item["response"])
-                    for item in merged
-                ]
-                name = "openai.json" if fmt == "openai" else "sharegpt.json"
-                (target / name).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-                files.append(name)
-                info = {
-                    "image-guard-" + fmt: {
-                        "file_name": name,
-                        "formatting": "sharegpt",
-                        "columns": {"messages": "messages", "images": "images"},
-                        "tags": {
-                            "role_tag": "role",
-                            "content_tag": "content",
-                            "user_tag": "user",
-                            "assistant_tag": "assistant",
-                        },
-                    }
-                }
-                (target / "dataset_info.json").write_text(
-                    json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
-                files.append("dataset_info.json")
+            # 训练文件：一行一条 messages，图片内联 base64
+            with (target / DATASET_FILE).open("w", encoding="utf-8") as handle:
+                for item in usable:
+                    record = self._openai_record(item["sample"], item["response"])
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            files.append(DATASET_FILE)
+
+            # 标注侧车：与训练文件逐行对齐，供筛选正负样本，训练时不需要
+            with (target / LABELS_FILE).open("w", encoding="utf-8") as handle:
+                for item in usable:
+                    label = self._label_record(item["sample"], item["response"])
+                    handle.write(json.dumps(label, ensure_ascii=False) + "\n")
+            files.append(LABELS_FILE)
         except OSError as error:
             return {"ok": False, "message": f"写导出文件失败：{error}"}
 
         manifest = {
             "exported_at": _iso_now(),
-            "format": fmt,
-            "samples": len(merged),
+            "format": "jsonl",
+            "samples": len(usable),
             "skipped_unusable": skipped,
-            "with_image": sum(1 for item in merged if self._data_urls(item["sample"])),
-            "label_violation": sum(1 for item in merged if item["response"].get("label") == "violation"),
-            "label_safe": sum(1 for item in merged if item["response"].get("label") == "safe"),
+            "with_image": sum(1 for item in usable if self._data_urls(item["sample"])),
+            "label_violation": sum(1 for item in usable if item["response"].get("label") == "violation"),
+            "label_safe": sum(1 for item in usable if item["response"].get("label") == "safe"),
             "source_dir": str(self._root),
             "files": files,
         }
@@ -721,29 +713,10 @@ class DatasetRecorder:
             )
         except OSError:
             pass
-        message = f"导出完成，共 {len(merged)} 条成功样本"
+        message = f"导出完成，共 {len(usable)} 条成功样本"
         if skipped:
             message += f"（已跳过 {skipped} 条失败/空返回记录）"
         return {"ok": True, "message": message, "dir": str(target), "manifest": manifest}
-
-    def _export_raw(self, target: Path, merged: list[dict]) -> str:
-        """raw 格式：原样拷出两份 JSONL，训练侧自行合并。"""
-        name = "samples.jsonl"
-        with (target / name).open("w", encoding="utf-8") as handle:
-            for item in merged:
-                handle.write(json.dumps(item["sample"], ensure_ascii=False) + "\n")
-        with (target / "responses.jsonl").open("w", encoding="utf-8") as handle:
-            for item in merged:
-                handle.write(json.dumps(item["response"], ensure_ascii=False) + "\n")
-        (target / "README.md").write_text(
-            "# ImageGuard 数据集（raw）\n\n"
-            "- samples.jsonl：一行一条请求侧记录，含 prompt 与图片 base64；\n"
-            "- responses.jsonl：一行一条响应侧记录，按 id 与 samples.jsonl 关联；\n"
-            "- 图片路径相对原数据集目录（<dataset_dir>/images/<样本id>/）。\n\n"
-            "需要标准 OpenAI 训练格式时改用「导出数据集 → 标准 OpenAI」。\n",
-            encoding="utf-8",
-        )
-        return name
 
     # ── 清理 ──────────────────────────────────────────────────
 

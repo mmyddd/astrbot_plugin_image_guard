@@ -135,7 +135,7 @@ dataset/
 ├── samples.jsonl          请求侧：一行一条，含 prompt 与图片 base64
 ├── responses.jsonl        响应侧：一行一条，含模型返回、标签与判定
 ├── images/<样本id>/img_1.jpg   解码后的图片，训练框架可直接按路径读取
-└── export/<格式>-<时间戳>/      openai.json / sharegpt.json / samples.jsonl
+└── export/<时间戳>/            dataset.jsonl / labels.jsonl / manifest.json
 ```
 
 拆分两个文件是为了对齐记录时机：**调用模型前**写 `samples.jsonl`，**模型返回后**写 `responses.jsonl`，两者用同一条 `id` 关联。进程在中途崩溃时请求侧已经落盘，不会整条丢失。
@@ -192,41 +192,31 @@ dataset/
 
 ### 导出
 
-配置中心 → 数据集留存 → 选格式 → **导出数据集**，产物写入 `<dataset_dir>/export/<格式>-<时间戳>/`：
+配置中心 → 数据集留存 → **导出数据集**，产物写入 `<dataset_dir>/export/<时间戳>/`，只有一种格式：
 
-| 格式 | 文件 | 用途 |
-| :--- | :--- | :--- |
-| **标准 OpenAI**（默认） | `openai.json` | 与插件真实发往接口的请求体同构，可直接喂给 OpenAI 格式的微调管线 |
-| **ShareGPT** | `sharegpt.json` + `dataset_info.json` | 需要 human/gpt 会话结构、图片走路径列表的老式训练脚本 |
-| **原始 JSONL** | `samples.jsonl` + `responses.jsonl` + `README.md` | 自行清洗、合并或转成其它格式 |
+| 文件 | 用途 |
+| :--- | :--- |
+| `dataset.jsonl` | 训练文件。一行一条样本，就是 OpenAI chat 的 `messages` |
+| `labels.jsonl` | 标注侧车。与训练文件逐行对齐，按 `id` 关联，仅供筛选正负样本 |
+| `manifest.json` | 本次导出的条数、跳过的不可用条数、含图条数与正负样本分布 |
 
-**标准 OpenAI** 的产物就是一行一条的 `messages`，图片以 `image_url` 分块内联为 data URL：
+`dataset.jsonl` 一行一条，`system` 放完整审核规则、`user` 放固定指令与图片、`assistant` 放三行判定（下例为便于阅读做了换行与缩进，实际一行一条）：
 
 ```json
-{
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        {"type": "text", "text": "你是一个严格但公正的内容审核员……"},
-        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ…"}}
-      ]
-    },
-    {"role": "assistant", "content": "REASON: 裸露画面\nRESULT: VIOLATION\nTAGS: [\"裸露\", \"白丝\"]"}
-  ],
-  "label": "violation",
-  "tags": ["裸露", "白丝"],
-  "id": "20261013-230623-68653a"
-}
+{"messages":[
+  {"role":"system","content":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"},
+  {"role":"user","content":[{"type":"text","text":"请按要求分析这张图片。"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQ..."}}]},
+  {"role":"assistant","content":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}
+]}
 ```
 
-`label` / `tags` / `id` 是给训练侧过滤与统计用的附加键，不属于 OpenAI 字段，标准训练框架会忽略它们；想按标签筛正负样本时直接读这三个键即可。
+记忆点：**规则在 system，指令在 user，判定在 assistant**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，而不是把规则当成一次性用户输入背下来——推理时换一套违规标准只改 system 即可复用同一个模型。
 
-> 插件本身没有独立的 system 提示词：规则、引导词与输出格式要求都拼在同一段 user 文本里发给模型。导出保持同构，微调后的模型可以直接替换现有供应商，不需要改提示词。
+> 插件运行时是把规则和图片塞在同一条 user 消息里发给供应商的；导出时拆到 system，是为了让微调后的模型行为更稳。两者对模型的语义等价，替换现有供应商不需要改插件提示词。
 
 **只有调用成功且返回非空的样本会进入数据集。** 失败、返回为空、以及只落盘了请求侧的在途记录都留在磁盘上供排查，但页面不显示、统计不计数、导出也不包含——它们没有可学习的监督目标，混进去只会教模型输出空串。页面的「数据集样本」数与导出口径完全一致，另有独立提示说明被排除了多少条。
 
-三种格式都会附带 `manifest.json`（条数、跳过的不可用条数、含图条数、正负样本分布）。
+> `labels.jsonl` 只是为了让你筛选样本时不必解析训练文件。**训练时忽略它**：把 `dataset.jsonl` 交给训练框架即可，多一个文件不会被读取。
 
 > ⚠️ 留存的数据包含用户图片与提示词，属于敏感内容：目录会长期占用磁盘，请自行确保存储安全，并定期导出后清理。数据集只用于本地模型微调，请遵守你所在地区关于数据留存与个人信息的法律要求。
 
@@ -243,7 +233,7 @@ dataset/
 * **审核白名单**：配置中心的「范围与处置」可维护白名单用户；名单内用户发送的图片**既不审核也不记录**，群聊与私聊均生效，概览顶栏会显示白名单人数。
 * **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
 * **配置中心**：七个分组标签页（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据集留存）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
-* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持按标准 OpenAI / ShareGPT / 原始 JSONL 三种格式一键导出，以及清空留存（已导出的产物保留）。
+* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为 OpenAI messages 结构的 dataset.jsonl（含逐行对齐的标注侧车），以及清空留存（已导出的产物保留）。
 * **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
 * **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
 
@@ -262,7 +252,7 @@ dataset/
 | POST | `audit/cache/clear` | 清空审核缓存指纹 |
 | POST | `audit/storage/prune` | 清理孤立图片 |
 | GET | `audit/dataset` | 数据集留存状态与样本预览（不回传 base64 正文） |
-| POST | `audit/dataset/export` | 按 `format`（openai / sharegpt / raw）导出数据集 |
+| POST | `audit/dataset/export` | 导出 dataset.jsonl 与标注侧车 labels.jsonl |
 | POST | `audit/dataset/clear` | 清空已留存的样本与图片 |
 
 ---

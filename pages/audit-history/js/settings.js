@@ -123,7 +123,6 @@
       const node = $(selector);
       if (node) node.disabled = !on;
     });
-    $$('#dataset-format .seg-btn').forEach(button => { button.disabled = !on; });
     if (!on) renderDatasetEmpty();
   }
 
@@ -849,8 +848,6 @@
   }
 
   /* ── 数据集留存 ───────────────────────────────────────── */
-  let datasetFormat = 'openai';
-
   function renderDatasetEmpty() {
     const status = $('#dataset-status');
     if (status) {
@@ -986,7 +983,7 @@
     if (button) button.classList.add('is-busy');
     setDatasetNote('正在导出…', '');
     try {
-      const result = await IG.api.datasetExport(datasetFormat, 0);
+      const result = await IG.api.datasetExport(0);
       const manifest = result.manifest || {};
       setDatasetNote(
         '导出完成：' + format.int(manifest.samples || 0) + ' 条成功样本 → ' + (result.dir || '') +
@@ -1110,14 +1107,6 @@
         markDirty();
       });
     }
-    $$('#dataset-format .seg-btn').forEach(button => {
-      button.addEventListener('click', () => {
-        datasetFormat = button.dataset.format || 'openai';
-        $$('#dataset-format .seg-btn').forEach(other => {
-          other.classList.toggle('is-active', other === button);
-        });
-      });
-    });
     const datasetExport = $('#dataset-export');
     if (datasetExport) datasetExport.addEventListener('click', exportDataset);
     const datasetRefresh = $('#dataset-refresh');
