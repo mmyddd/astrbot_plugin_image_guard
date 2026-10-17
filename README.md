@@ -1,230 +1,150 @@
 # 🛡️ 图片内容审查卫士 (Image Guard Pro)
 
-> **版本**: v1.12.0
-> **作者**: YEZI
+> **版本**: v1.13.0
+> **作者**: mmyddd
 
-这是一个专为 AstrBot 设计的高级视觉审核插件。它利用多模态大模型（如 Gemini 1.5/2.5 Pro, GPT-4o）的视觉理解能力，对群聊/私聊发送的图片进行**语义级审查**。
-
-与传统的关键词匹配不同，它能“看懂”图片里的内容。
+AstrBot 视觉审核插件。它用多模态大模型（Gemini、GPT-4o 等）对群聊/私聊图片做语义审查，不依赖关键词匹配。
 
 ---
 
 ## ✨ 核心功能
 
-### 1. 双重检测机制
-* **🅰️ 文字识图 (OCR)**：图片里只要出现了你指定的敏感词（如“加群”、“退款”），立即封禁。
-* **🅱️ 内容识图 (Semantic)**：图片画面包含你指定的违禁事物（如“东亚地图”、“血腥画面”），立即封禁。
-
-### 2. 智能过滤 (Smart Filter) v1.6.4 New!
-* ✅ **GIF 动图压缩**：GIF 会保留动画并压缩为 `image/gif` data URL；超限时依次减少颜色、尺寸和帧数。
-* ✅ **自动放行**：QQ 自带表情包、收藏的贴图。Bot 不会浪费 Token 去检测这些内容。
-* ❌ **精准拦截**：JPG/PNG 等静态图片与 GIF 动图都会按配置压缩后审查。
-
-### 3. 静默执法 (Silent Assassin)
-* **群内**：检测到违规瞬间**撤回消息 + 禁言用户**。Bot 在群内保持绝对沉默，不发送任何提示，极具威慑力。
-* **私聊**：Bot 会私聊管理员发送**执法战报**，包含违规图片证据、撤回/禁言的执行状态以及 **LLM 给出的判罚理由**。
-
-### 4. 违规标签与审计检索
-* **自动标签**：判定为 `VIOLATION` 的图片会由视觉模型生成简短内容标签，例如“女性裸露”“白丝”“肌肤裸露”。
-* **WebUI 筛选**：审核记录页在理由下方显示标签，并提供左侧标签统计筛选和关键词搜索。
-* **隐私边界**：`SAFE` 图片不会写入审核历史或保存原图；启用审核缓存时只保留内容指纹和审核次数。
+- **双重检测**：OCR 识别图片中的敏感文字，语义模型识别违禁画面。
+- **智能过滤**：GIF 保留动画并压缩；QQ 自带表情包、收藏贴图自动放行；静态图片与 GIF 压缩后送审。
+- **静默执法**：群聊命中后按配置撤回消息并禁言，不发送提示；私聊给管理员发战报，附证据、执行状态和判定理由。
+- **标签与审计**：违规图片由模型生成内容标签；记录页支持标签、关键词和处置状态检索。SAFE 图片不写历史、不存原图；启用缓存时只保留内容指纹与审核次数。
 
 ---
 
-## ⚙️ 配置指南 (避坑必读)
+## ⚙️ 配置指南
 
-### ⚠️ 特别警告：关于“内容识图”的描述技巧
+配置中心（插件页）与 `_conf_schema.json` 共用同一份配置。
 
-在配置 `forbidden_descriptions`（违禁画面描述）时，请务必**精确描述**，不要使用宽泛的词汇！
+### 内容识图要写具体
 
-> **❌ 错误示范**：
-> 配置了违禁词：`"东亚"`
-> 
-> **💥 灾难后果**：
-> 用户发了一张 **“赫鲁晓夫楼”**（老式居民楼）的照片。
-> LLM 判定逻辑：赫鲁晓夫楼 -> 常见于中国北方 -> 属于东亚地区事物 -> **判定违规，禁言！**
-> *(这就是典型的因描述不准确导致的冤假错案)*
+`forbidden_descriptions` 描述的是画面，不是主题。写得太宽，建筑照、风景照也可能被判违规。
 
-> **✅ 正确示范**：
-> 配置违禁词：`"东亚地图"`
-> 
-> **🎉 正确结果**：
-> 只有当图片真的是一张地图时，才会触发封禁。发风景照、建筑照均安全。
+> 配置 `东亚` 时，一张赫鲁晓夫楼照片可能被模型按“东亚建筑”误判；写成 `东亚地图` 后，只有地图会命中。
 
-**💡 专家建议**：配合 **Gemini-2.5-Pro** 等高智商模型，并使用精确的描述词，本插件的准确率极高，几乎不会误封。
+建议配合较强的多模态模型使用，并把描述写成具体对象、构图或行为，例如“裸露的人体”“大面积血迹”“赌博平台界面”。
 
----
-
-### 📝 详细配置项说明
-
-配置中心（插件页）与 `_conf_schema.json` 共用同一份配置，两处都可以改。
+### 配置项
 
 | 配置项 | 说明 | 推荐值 |
 | :--- | :--- | :--- |
-| **llm_providers** | **(核心)** 供应商列表，按顺序依次尝试，第一个返回结果的即本次审核结论。模板：**OpenAI 兼容** / **ModelScope** / **AstrBot 当前 Provider**。配置中心支持新增、编辑、排序、删除与**一键连通性测试**；页面读到的 API Key 是掩码，回传掩码即表示不修改。 | 配置中心 → LLM 供应商 |
-| **reasoning_effort** | 透传给模型的推理强度，留空则不发送该参数。 | `medium` 或留空 |
-| **custom_vision_prompt** | **自定义引导词**：教模型重点看哪些细节，会拼接到系统提示词。 | "请仔细分辨地图轮廓，非地图类图片一律放行。" |
-| **sensitive_texts** | **文字识图（OCR）**：图片里出现这些文字即违规。 | `["加微信", "退款", "代充"]` |
-| **forbidden_descriptions** | **内容识图（语义）**：画面符合这些描述即违规。 | `["东亚地图", "裸露画面"]` |
-| **llm_max_tokens** | 单次审核输出的最大 token 数，本地 reasoning 模型容易先输出思考过程，建议调大避免结论被截断。 | `512` |
-| **llm_timeout_seconds** | 接口请求超时（秒）。本地视觉模型首次处理图片较慢，建议 120 秒或更高。 | `120.0` |
-| **compressed_image_max_bytes** | 送审前把图片 data URL 压缩到该字节数以内；GIF 会保留动画并按需减少颜色、尺寸或帧数。 | `1048576` |
-| **group_scope** / **private_scope** | 启用审查的群号 / 私聊用户，填 `0` 表示全部。 | `["0"]` / `[]` |
-| **audit_whitelist** | **审核白名单**：名单内用户（按发送者 QQ 判断）的图片不送审、不记录，群聊与私聊均生效。留空表示不使用。 | `["1000100", "1000101"]` |
-| **skip_audit_for_banned** | **黑名单插件兼容**：是否跳过被 [AstrBot-ban-Plugins](https://github.com/dahetaoa/AstrBot-ban-Plugins) 禁用的用户。默认 `false`——被禁用户仍会被审核。 | `false` |
-| **check_probability** | 抽查概率（0.0-1.0），1.0 为每图必查。 | `1.0` |
-| **enable_recall** | 是否撤回群聊中的违规图片消息（需要 Bot 具备管理员权限）。 | `true` |
-| **ban_duration** | 违规禁言时长（秒），`0` 表示不禁言。 | `86400` |
-| **report_target_id** | 违规战报默认接收人（管理员 QQ 号），留空则不转发。 | 你的 QQ 号 |
-| **group_report_targets** | **群上报映射**：为指定来源群单独指定战报接收目标，支持 `private` 私聊与 `group` 群聊；未命中时回退到 `report_target_id`。配置中心可在表格里直接增删。 | `908799265 → private:123456789` |
-| **audit_history_max_records** | 审核历史最大保留条数，超出后删除最早记录，`0` 表示不保留。 | `500` |
-| **audit_cache_enabled** | 启用审核缓存：同一张图片累计审核达到阈值后直接跳过。 | `true` |
-| **audit_cache_threshold** | 跳过阈值（次）。`1` 表示同一图片只审一次，`0` 会被自动调整为 `1`。 | `3` |
-| **audit_cache_max_entries** | 缓存条目上限，超出后淘汰计数最低的条目，`0` 表示不限制（不推荐）。 | `10000` |
-| **keep_compressed_image_in_temp** | 调试开关：把压缩后的图片保存到 `data/temp/astrbot_plugin_image_guard` 并在日志中输出路径。 | `false` |
-| **debug_log_llm_response** | 调试开关：把模型原始响应写入日志，可能包含判定理由或图片相关敏感信息。 | `false` |
-| **dataset_capture_enabled** | **留存prompt**：把每次送审的图片 base64、完整提示词与模型返回落盘，模型给出的标签直接作为标注，供本地模型微调。**关闭时不创建任何目录与文件**。 | `false` |
-| **dataset_dir** | 数据集存储目录，留空使用默认目录 `data/plugin_data/image_guard/dataset`。 | 留空 |
-| **dataset_max_samples** | 样本条数上限，达到后停止留存（不淘汰旧样本，避免静默丢数据）。 | `2000` |
-| **dataset_max_image_mb** | 单图留存上限（MB），超出只记元数据不存 base64。 | `8` |
-| **dataset_min_free_mb** | 磁盘余量下限（MB），低于该值自动暂停留存。 | `512` |
+| **llm_providers** | 供应商列表，按顺序尝试，第一个成功结果即本次结论。支持 OpenAI 兼容 / ModelScope / AstrBot 当前 Provider；页面可增删改排序、测试连通性。API Key 以掩码展示，回传掩码表示不修改。 | 配置中心 → LLM 供应商 |
+| **reasoning_effort** | 透传给模型的推理强度，留空不发送。 | `medium` 或留空 |
+| **custom_vision_prompt** | 自定义识图引导词，会拼接到系统提示词。 | "请仔细分辨地图轮廓，非地图类图片一律放行。" |
+| **sensitive_texts** | OCR 敏感文字列表。 | `["加微信", "退款", "代充"]` |
+| **forbidden_descriptions** | 语义违禁画面描述列表。 | `["东亚地图", "裸露画面"]` |
+| **llm_max_tokens** | 单次审核最大输出 token。本地 reasoning 模型建议调大，避免结论被截断。 | `512` |
+| **llm_timeout_seconds** | 接口超时（秒）。本地视觉模型首次处理可能较慢。 | `120.0` |
+| **compressed_image_max_bytes** | 送审 data URL 的压缩上限；GIF 会保留动画并减少颜色、尺寸或帧数。 | `1048576` |
+| **group_scope** / **private_scope** | 启用审查的群号 / 私聊用户。默认不启用，需显式添加；填 `0` 表示全部。 | `[]` / `[]` |
+| **audit_whitelist** | 审核白名单。名单内用户（按发送者 QQ）的图片不送审、不记录，群聊与私聊均生效。 | `["1000100", "1000101"]` |
+| **skip_audit_for_banned** | 是否跳过被 [AstrBot-ban-Plugins](https://github.com/dahetaoa/AstrBot-ban-Plugins) 禁用的用户。默认关闭，被禁用户仍会被静默审核。 | `false` |
+| **check_probability** | 抽查概率（0.0–1.0），1.0 为每图必查。 | `1.0` |
+| **enable_recall** | 是否撤回群聊中的违规图片消息，需要 Bot 具备管理员权限。 | `true` |
+| **ban_duration** | 违规禁言时长（秒），0 表示不禁言。 | `86400` |
+| **report_target_id** | 违规战报默认接收人（管理员 QQ），留空不转发。 | 你的 QQ 号 |
+| **group_report_targets** | 群上报映射：为指定来源群单独指定接收目标，支持 private / group；未命中时回退到 `report_target_id`。 | `908799265 → private:123456789` |
+| **audit_history_max_records** | 审核历史最大保留条数，超出删除最早记录，0 表示不保留。 | `500` |
+| **audit_cache_enabled** | 启用审核缓存：同一图片累计达到阈值后直接跳过。 | `true` |
+| **audit_cache_threshold** | 缓存跳过阈值（次）。1 表示只审一次，0 会被调整为 1。 | `3` |
+| **audit_cache_max_entries** | 缓存条目上限，超出淘汰计数最低项，0 表示不限制（不推荐）。 | `10000` |
+| **keep_compressed_image_in_temp** | 调试：把压缩图保存到 `data/temp/astrbot_plugin_image_guard` 并在日志输出路径。 | `false` |
+| **debug_log_llm_response** | 调试：把模型原始响应写入日志，可能包含判定理由等敏感信息。 | `false` |
+| **dataset_capture_enabled** | 留存prompt：把送审图片 base64、完整提示词、模型返回与标签落盘，供微调使用。关闭时不创建目录和文件。 | `false` |
+| **dataset_dir** | 数据集目录，留空使用 `data/plugin_data/image_guard/dataset`。 | 留空 |
+| **dataset_max_samples** | 样本条数上限，达到后停止留存，不淘汰旧样本。 | `2000` |
+| **dataset_max_image_mb** | 单图留存上限（MB），超出只记元数据，不存 base64。 | `8` |
+| **dataset_min_free_mb** | 磁盘余量下限（MB），低于该值暂停留存。 | `512` |
 | **dataset_capture_raw_response** | 是否额外保存接口原始响应 JSON（含 token 用量）。 | `false` |
 
-### 🚦 门控降本（SystemOne，可选）
+### 门控降本（SystemOne，可选）
 
-在视觉大模型之前插入一道低成本判定：每张图先问一次「是否命中违规清单」，拿到违规概率，低于阈值就直接放行、不调用视觉大模型。
+在视觉大模型之前插入一道低成本判定：先问一次“是否命中违规清单”，拿到违规概率；低于阈值直接放行，不调用视觉大模型。
 
-**门控结论不会传给大模型**，也不会写进审核历史——大模型看到的规则、问题与门控关闭时完全一致，避免先入为主。门控调用失败、超时或配置不全时一律按放行处理（继续走视觉大模型），不会因为它故障而漏审。
+门控结论不会传给大模型，也不会写入审核历史。门控失败、超时或配置不完整时一律按放行处理，继续走视觉大模型，不会因门控故障漏审。
 
 | 配置项 | 说明 | 推荐值 |
 | :--- | :--- | :--- |
-| **systemone_enabled** | 门控总开关。关闭时插件行为与未接入门控时完全一致，不产生任何额外请求。 | `false` |
-| **systemone_base_url** | 门控网关地址，留空使用默认 OpenRouter 地址。 | `https://openrouter.ai/api` |
-| **systemone_endpoint_path** | 端点路径，留空则按网关地址自动判断（`/api` 结尾用 `/alpha/decisions`，`/v1` 结尾用 `/decisions`）。 | 留空 |
-| **systemone_api_key** | 门控 API Key，独立于 `llm_providers`，可与视觉大模型分开计费。页面显示为掩码，回传掩码表示不修改。 | `sk-or-v1-...` |
+| **systemone_enabled** | 门控总开关。关闭时行为与未接入门控一致，不产生额外请求。 | `false` |
+| **systemone_base_url** | 门控网关地址，留空用默认 OpenRouter 地址。 | `https://openrouter.ai/api` |
+| **systemone_endpoint_path** | 端点路径，留空按网关自动判断（`/api` → `/alpha/decisions`，`/v1` → `/decisions`）。 | 留空 |
+| **systemone_api_key** | 门控 API Key，与视觉大模型独立计费；页面显示掩码，回传掩码表示不修改。 | `sk-or-v1-...` |
 | **systemone_model** | 门控模型名，需支持图文联合判定。 | `cloudflare/clef-flash` |
-| **systemone_violation_threshold** | **违规概率阈值**：低于此值直接放行，高于或等于此值才送视觉大模型。调高更省钱但更易漏放。 | `0.3` |
-| **systemone_timeout_seconds** | 门控单次请求超时（秒）。超时按放行处理，不会阻塞审核。 | `15.0` |
-| **systemone_max_image_bytes** | 门控单图字节上限。**原始图**在此范围内直接送审不压缩，超过才走压缩链路。压缩会抹掉小字水印与边角贴纸，所以默认给得比较宽松。 | `300000` |
-| **systemone_question** | 判定问题，留空使用内置问句。门控只输出概率、不生成任何文字。 | 内置问句 |
-| **systemone_sensitive_texts** | 门控专用敏感文字，**留空即继承** `sensitive_texts`；填写后仅门控生效。 | `[]` |
-| **systemone_forbidden_descriptions** | 门控专用违规画面描述，**留空即继承** `forbidden_descriptions`。 | `[]` |
-| **systemone_vision_prompt** | 门控专用识图引导词，**留空即继承** `custom_vision_prompt`。 | `""` |
+| **systemone_violation_threshold** | 违规概率阈值：低于直接放行，高于或等于送视觉大模型。调高更省钱但更易漏放。 | `0.3` |
+| **systemone_timeout_seconds** | 门控超时（秒），超时按放行处理。 | `15.0` |
+| **systemone_max_image_bytes** | 门控单图字节上限。原始图在范围内直接送审不压缩，超过才压缩。 | `300000` |
+| **systemone_question** | 判定问题，留空用内置问句。门控只输出概率，不生成文字。 | 内置问句 |
+| **systemone_sensitive_texts** | 门控专用敏感文字，留空继承 `sensitive_texts`。 | `[]` |
+| **systemone_forbidden_descriptions** | 门控专用画面描述，留空继承 `forbidden_descriptions`。 | `[]` |
+| **systemone_vision_prompt** | 门控专用识图引导词，留空继承 `custom_vision_prompt`。 | `""` |
 
-> 覆盖项做成「留空继承」而不是「留空清空」：开关刚打开、还没配覆盖项时，门控判据与视觉大模型完全一致，不会出现「门控按更宽的规则放行」这种漏放。只有两边判据一致，门控省下的钱才是真省下来的。
+覆盖项采用“留空继承”，这样刚打开门控、还没配覆盖项时，门控判据与视觉大模型一致，不会出现门控按更宽规则放行。
 
-**怎么定阈值？** 安全图的概率通常聚集在 0.01~0.15，违规图聚集在 0.80~0.98，中间是空白区。阈值落在空白里既省钱又不漏放；落在空白右侧（>0.7）会开始漏掉明显违规的图。建议先用默认值 `0.3` 跑一周，看页面「审核漏斗」里的门控放行数与实际违规数是否对得上，再往下调。
+阈值怎么定：安全图的概率通常集中在 0.01–0.15，违规图集中在 0.80–0.98，中间是空白区。建议先用默认 0.3 跑一周，对照门控放行数与实际违规数，再决定是否下调。
 
 ---
 
 ## 🧪 留存prompt：把审核过程变成微调数据集
 
-插件在**配置中心 → 数据集留存**提供一个「留存prompt」开关（默认**关闭**）。开启后，每次送审都会留下三样东西，外加模型自己打的标签：
+在配置中心的「数据集留存」页，有一个“留存prompt”开关，默认关闭。开启后会保存四类内容：
 
-1. **发送给模型的图片**（压缩后实际送审的 data URL 与 base64 正文，解码后的图片文件同时落盘）；
-2. **发送给模型的提示词**（含自定义引导词与违规标准的完整 prompt）；
-3. **模型返回的内容**（原文、REASON、RESULT）；
-4. **模型打的标签**（`TAGS` 行解析结果，作为数据集的 `label` 与 `tags` 标注）。
+1. 实际送审的图片（data URL、base64 与解码后的图片文件）；
+2. 完整提示词（含引导词与违规标准）；
+3. 模型返回原文（REASON / RESULT）；
+4. 模型标签（TAGS 解析结果，作为 `label` 与 `tags` 标注）。
 
-### 存储位置与格式
+### 存储结构
 
-默认目录 `data/plugin_data/image_guard/dataset`（可用 `dataset_dir` 改）：
+默认目录 `data/plugin_data/image_guard/dataset`（可用 `dataset_dir` 修改）：
 
 ```
 dataset/
-├── samples.jsonl          请求侧：一行一条，含 prompt 与图片 base64
-├── responses.jsonl        响应侧：一行一条，含模型返回、标签与判定
-├── images/<样本id>/img_1.jpg   解码后的图片，训练框架可直接按路径读取
-└── export/<时间戳>/            dataset.jsonl / labels.jsonl / manifest.json
+├── samples.jsonl          请求侧：prompt、图片 base64
+├── responses.jsonl        响应侧：模型返回、标签与判定
+├── images/<样本id>/       解码后的图片，训练框架可直接读取
+└── export/<时间戳>/       dataset.jsonl / labels.jsonl / manifest.json
 ```
 
-拆分两个文件是为了对齐记录时机：**调用模型前**写 `samples.jsonl`，**模型返回后**写 `responses.jsonl`，两者用同一条 `id` 关联。进程在中途崩溃时请求侧已经落盘，不会整条丢失。
-
-`samples.jsonl` 单条记录：
-
-```json
-{
-  "id": "20261013-224912-a1b2c3",
-  "schema_version": 1,
-  "created_at": "2026-10-13 22:49:12",
-  "source": {"group_id": "888", "user_id": "10001", "user_name": "张三", "is_group": true},
-  "request": {
-    "prompt": "你是一个严格但公正的内容审核员……",
-    "provider": "", "model": "",
-    "image_count": 1,
-    "images": [{"index": 1, "mime": "image/jpeg", "base64": "/9j/4AAQ…", "bytes": 288,
-                "sha256": "…", "path": "images/20261013-224912-a1b2c3/img_1.jpg", "missing_reason": ""}]
-  }
-}
-```
-
-`responses.jsonl` 单条记录：
-
-```json
-{
-  "id": "20261013-224912-a1b2c3",
-  "status": "ok",
-  "text": "REASON: 裸露画面\nRESULT: VIOLATION\nTAGS: [\"裸露\",\"白丝\"]",
-  "tags": ["裸露", "白丝"],
-  "label": "violation",
-  "reason": "裸露画面",
-  "error": "",
-  "elapsed_ms": 1234,
-  "provider": "Gemini 主线路",
-  "model": "gemini-2.5-pro",
-  "recorded_at": "2026-10-13 22:49:14",
-  "raw": null
-}
-```
+请求侧在调用模型前写入，响应侧在模型返回后写入，两者用同一条 `id` 关联。进程中途崩溃时，请求侧已落盘，不会整条丢失。
 
 ### 边界情况
 
 | 情况 | 处理 |
 | :--- | :--- |
-| 开关关闭 | 不建目录、不写文件、不读盘，插件行为与没有该功能时完全一致 |
-| 图片为空 / 非 base64（HTTP URL、本地路径、空值） | 该张图记 `missing_reason`，**不阻断整条样本**——prompt 与模型返回仍然留存 |
-| base64 非法或解不出内容 | 同上，记 `missing_reason`，不写图片文件 |
-| 单图超过 `dataset_max_image_mb` | 只记字节数与摘要，不存 base64 与图片文件 |
-| 模型返回为空 | 记 `status: ok` + 空 `text`，保留 prompt 与图片便于排查；**不计入数据集、不导出、不上页面** |
-| 模型调用失败 / 超时 | 请求侧照常落盘，响应侧记 `status: failed` 与错误原因；同样**不纳入数据集** |
-| 达到 `dataset_max_samples` | 停止留存新样本（不淘汰旧样本），页面顶部提示先导出再清理 |
-| 磁盘余量低于 `dataset_min_free_mb` | 自动暂停留存并写日志告警，避免写满磁盘拖垮 AstrBot |
+| 开关关闭 | 不建目录、不写文件、不读盘 |
+| 图片为空、非 base64 或 base64 非法 | 该图记 `missing_reason`，不阻断整条样本 |
+| 单图超过 `dataset_max_image_mb` | 只记字节数与摘要，不存 base64 和图片文件 |
+| 模型返回为空或调用失败 | 请求侧照常落盘，响应侧记录状态；不纳入数据集、不导出 |
+| 达到 `dataset_max_samples` | 停止留存新样本，提示先导出再清理 |
+| 磁盘余量低于 `dataset_min_free_mb` | 自动暂停留存并写日志告警 |
 
 ### 导出
 
-配置中心 → 数据集留存 → **导出数据集**，产物写入 `<dataset_dir>/export/<时间戳>/`，只有一种格式：
+配置中心 → 数据集留存 → 导出数据集，产物写入 `<dataset_dir>/export/<时间戳>/`：
 
 | 文件 | 用途 |
 | :--- | :--- |
-| `dataset.jsonl` | 训练文件。一行一条样本，多模态 `messages` 结构（system / user / assistant） |
-| `images/` | 样本图片。**导出时从留存目录复制过来**，导出产物可以整体搬走 |
-| `dataset_info.json` | LLaMA-Factory 注册文件，说明各列怎么解析 |
-| `labels.jsonl` | 标注侧车。与训练文件逐行对齐，按 `id` 关联，仅供筛选正负样本 |
-| `manifest.json` | 本次导出的条数、跳过的条数与正负样本分布 |
+| `dataset.jsonl` | 训练文件，一行一条多模态 `messages` 样本（system / user / assistant） |
+| `images/` | 从留存目录复制的图片，导出产物可整体搬走 |
+| `dataset_info.json` | LLaMA-Factory 注册文件 |
+| `labels.jsonl` | 与训练文件逐行对齐的标注侧车，仅用于筛选正负样本，训练时忽略 |
+| `manifest.json` | 本次导出的条数、跳过条数与正负样本分布 |
 
-`dataset.jsonl` 一行一条（下例为便于阅读做了换行与缩进，实际一行一条）：
+`dataset.jsonl` 每行形如：
 
 ```json
-{"messages":[{"role":"system","content":"你是一个严格但公正的内容审核员。请分析图片是否包含违规信息。\n【自定义关注点】\n……\n标签要求：仅在 VIOLATION 时提供，最多8个具体、简短、互不重复的画面标签。\n"},{"role":"user","content":"<image>请按要求分析这张图片。"},{"role":"assistant","content":"REASON: 主体掀裙露大腿，衣冠不整\nRESULT: VIOLATION\nTAGS: [\"大腿裸露\", \"掀裙\", \"衣冠不整\"]"}],"images":["images/20261013-235253-629fd0_1.jpg"]}
+{"messages":[{"role":"system","content":"…审核规则…"},{"role":"user","content":"<image>请按要求分析这张图片。"},{"role":"assistant","content":"REASON: …\nRESULT: VIOLATION\nTAGS: [\"…\"]"}],"images":["images/…_1.jpg"]}
 ```
 
-记忆点：**规则在 system，指令在 user，判定在 assistant**。规则与「看哪张图」解耦后，模型学到的是"按 system 里的规则判图"，换一套违规标准只改 system 即可复用同一个模型。
+导出采用 `messages` 轮次 + 独立 `images` 路径列。OpenAI 的 `content[].image_url` 是接口请求格式，LLaMA-Factory、ms-swift 等训练框架不识别，因此不直接沿用。
 
-轮次用 `user`/`assistant` 而非 sharegpt 默认的 `human`/`gpt`：LLaMA-Factory 官方文档把这种写法称为 **openai 格式**（内容是 sharegpt 的一个特例），并给出对应的 `role_tag`/`content_tag` 注册写法；ms-swift 的标准键也正好是 `messages` + `user`/`assistant`。两边都不用再配角色映射表。
+记忆点：**规则在 system，指令在 user，判定在 assistant**。换一套违规标准只改 system，就能复用同一个模型。
 
-### 为什么不用 OpenAI 的 messages 结构
-
-OpenAI 的 `messages` + `content[].image_url` 是**接口请求体**格式，不是训练格式：
-
-| 框架 | 图片怎么给 | 认 image_url 吗 |
-| :--- | :--- | :--- |
-| LLaMA-Factory | 独立的 `images` 列，值是**文件路径**，按 `media_dir` 拼路径后用 `os.path.isfile` 校验 | ❌ `mm_plugin.py` 里没有 `image_url` 这个字面量，content 里的图片不会被解析 |
-| ms-swift | 标准键 `messages` / `images`，图片列放**路径或 URL** | ❌ 只认自己的 content block 规范 |
-| unsloth | `messages` 内容分块 `{"type":"image","image":<路径或PIL对象>}` | ❌ 字段名是 `image` 不是 `image_url`，需要几行 map 转换 |
-
-所以导出改用 **`messages` 轮次 + `images` 路径列**：LLaMA-Factory 的 `formatting` 取值是 `{alpaca, sharegpt, openai}`，多模态三种写法都只认独立的 `images` 列，而 `messages` + `user`/`assistant` 正是官方文档里的 openai 写法；ms-swift 的标准键同样是 `messages`。
-
-**训练命令（LLaMA-Factory）**：把导出目录当作 `dataset_dir`，图片和 `dataset_info.json` 已在里面：
+训练命令（LLaMA-Factory，把导出目录同时作为 `dataset_dir` 和 `media_dir`）：
 
 ```bash
 llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml \
@@ -233,94 +153,72 @@ llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml \
   media_dir <导出目录>
 ```
 
-> unsloth 需要一步转换：把每个 `{"role":"user","content":"<image>…"}` 拆成 `{"type":"text","text":…}` 与 `{"type":"image","image":<路径>}` 两个分块。官方 vision 微调文档里有对应的 `convert_to_conversation` 示例，十几行代码。
+unsloth 需要把 user 内容拆成 text / image 两个 block，官方 vision 微调文档有对应示例。
 
-> 插件运行时是把规则和图片塞在同一条 user 消息里发给供应商的；导出时把规则拆到 system，是为了让微调后的模型行为更稳。两者对模型语义等价，替换现有供应商不需要改插件提示词。
+只有调用成功、返回非空且带图片的样本会进入数据集。失败、空返回、在途记录和无图片样本留在磁盘供排查，但不纳入数据集。
 
-**只有调用成功、返回非空且带图片的样本会进入数据集。** 失败、返回为空、在途记录、以及没有图片内容的样本都留在磁盘上供排查，但不进数据集——前三种没有监督目标，最后一种会教模型不看图作答。页面的「数据集样本」数与导出口径完全一致，另有独立提示说明被排除了多少条。
+### 单条删除与隐私
 
-> `labels.jsonl` 只是为了让你筛选样本时不必解析训练文件。**训练时忽略它**。
+样本预览中每条记录都可单独删除，删除会同时清理请求侧、响应侧与图片文件，不影响已导出的产物。删除后条数上限重新计算。
 
-### 单条删除
-
-样本预览里每条记录右上角有删除按钮，删掉后会**同时清理请求侧、响应侧与图片文件**，但不动已导出的产物。适合用于剔除误判样本或标签质量差的记录：导出目录是自包含的副本，删留存记录不会让旧数据集缺图。删除后条数上限会重新计时，因达到上限而暂停的留存可以继续。
-
-> ⚠️ 留存的数据包含用户图片与提示词，属于敏感内容：目录会长期占用磁盘，请自行确保存储安全，并定期导出后清理。数据集只用于本地模型微调，请遵守你所在地区关于数据留存与个人信息的法律要求。
+留存数据包含用户图片与提示词，属于敏感内容。目录会长期占用磁盘，请确保存储安全，定期导出后清理，并遵守当地关于数据留存与个人信息的法律要求。
 
 ---
 
 ## 🖥️ 审核控制台（插件页）
 
-插件在 AstrBot WebUI 中提供一个独立的页面（`pages/audit-history`），无需进入插件配置页即可完成日常运维：
+页面位于 `pages/audit-history`，通过 AstrBot WebUI 打开，无需进入插件配置页。
 
-* **处理中**：正在审核的图片会以顶部的"处理中"横条实时展示（谁发的、来自哪个群、几张、已用时、待审缩略图），每 1.5-4 秒轮询刷新，可收起。**命中 VIOLATION 才写入审核记录，判定 SAFE 的直接丢弃**，不产生历史条目。
-* **审核概览**：KPI 带（违规总数 / 处置成功率 / 缓存跳过 / LLM 调用 / 已审核图片 / 审核用时 / 判定安全并丢弃）、14 天违规趋势图（可切 7 / 14 / 30 天）、供应商命中占比（面板高度固定，超出滚动查看，占比按全部供应商计算）、运行配置快照。
-* **审核记录**：卡片流展示证据缩略图、判定理由、内容标签与处置状态；支持关键词搜索、标签筛选、处置状态筛选、时间排序、分页与 CSV 导出。
-* **审核用时**：概览显示平均单张耗时与峰值（按送审样本统计），每条记录卡片与详情抽屉标注该次审核的实际耗时，CSV 导出含「审核用时(毫秒)」列。
-* **审核白名单**：配置中心的「范围与处置」可维护白名单用户；名单内用户发送的图片**既不审核也不记录**，群聊与私聊均生效，概览顶栏会显示白名单人数。
-* **记录详情**：点击卡片打开侧边抽屉，查看原图大图、完整理由、标签与用户 / 来源 / 禁言时长等信息。
-* **配置中心**：七个分组标签页（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据集留存）。规则以标签形式增删；供应商支持增删改排序与连通性测试；改动先停留在页面，确认后写入配置并热重载插件；未保存时切换页面会二次确认。
-* **数据集留存**：一个开关控制是否把「图片 base64 + 提示词 + 模型返回 + 模型标签」落盘；面板实时显示样本条数、占用空间与磁盘余量，支持一键导出为多模态 messages 结构的 dataset.jsonl（system / user / assistant，图片与 LLaMA-Factory 注册文件一并复制，导出目录可整体搬走）；每条记录可单独删除（连同图片一起清理），也可整体清空留存（已导出的产物不受影响）。
-* **维护操作**：清空审核缓存（重置计数，不动历史）、清理没有记录引用的本地图片、清空审核历史、删除单条记录。
-* **主题**：跟随 AstrBot 面板的深浅色，也可在顶栏手动切换。
+- **概览**：Bento 布局。违规趋势与判定安全率为主卡，实时队列、处置成功率、节省调用为辅卡，最近违规与当前策略为长卡。趋势可切 7 / 14 / 30 天。命中 VIOLATION 才写记录；SAFE 直接丢弃，不产生历史条目。
+- **记录**：左侧列表 + 右侧详情。列表支持「最近违规 / 审核中 / 处置失败」、关键词搜索、标签筛选、状态筛选、排序、分页与 CSV 导出；右侧展示原图、判定理由、处置结果与处理轨迹，并标注本次审核耗时（CSV 含「审核用时(毫秒)」列）。
+- **配置**：左侧 7 个分组（审查规则 / LLM 供应商 / 门控降本 / 范围与处置 / 图片与调试 / 缓存与存储 / 数据留存），右侧单组表单。群号、私聊用户、白名单、敏感文字与画面描述统一用 chip + 添加按钮；右上角可进入 3 步配置向导。改动先留在页面，确认后写入配置并热重载；未保存时离开会先确认。
+- **数据集**：开关控制留存；面板显示样本数、占用空间与磁盘余量，支持导出、单条删除和整体清空（不影响已导出产物）。
+- **维护/主题**：可清空缓存、清理孤立图片、清空历史、删除单条记录；主题跟随 AstrBot，也可在顶栏切换。
 
-页面通过 `window.AstrBotPluginPage` bridge 调用下列插件 API：
+页面通过 `window.AstrBotPluginPage` bridge 调用插件 API：
 
 | 方法 | 路由 | 说明 |
 | :--- | :--- | :--- |
-| GET | `audit/list` | 审核记录（最多 1000 条）、供应商统计、缓存统计、配置摘要、运行统计与处理中任务 |
-| GET | `audit/pending` | 仅返回正在审核的任务（供页面轮询） |
+| GET | `audit/list` | 记录、供应商统计、缓存统计、配置摘要、运行统计与处理中任务 |
+| GET | `audit/pending` | 正在审核的任务 |
 | POST | `audit/delete` | 删除单条记录 |
 | POST | `audit/clear` | 清空审核历史 |
-| GET | `audit/config` | 读取插件配置（API Key 已掩码） |
-| POST | `audit/config/update` | 按白名单合并配置并热重载 |
-| POST | `audit/providers/save` | 整体保存供应商列表并热重载 |
+| GET | `audit/config` | 读取插件配置（Key 已掩码） |
+| POST | `audit/config/update` | 合并配置并热重载 |
+| POST | `audit/providers/save` | 保存供应商列表并热重载 |
 | POST | `audit/providers/test` | 供应商连通性测试 |
-| POST | `audit/cache/clear` | 清空审核缓存指纹 |
+| POST | `audit/systemone/test` | 门控连通性测试 |
+| POST | `audit/cache/clear` | 清空审核缓存 |
 | POST | `audit/storage/prune` | 清理孤立图片 |
-| GET | `audit/dataset` | 数据集留存状态与样本预览（不回传 base64 正文） |
-| POST | `audit/dataset/export` | 导出 dataset.jsonl、图片目录与框架注册文件 |
-| POST | `audit/dataset/delete` | 删除单条留存记录（图片、提示词与模型返回一并清理） |
-| POST | `audit/dataset/clear` | 清空已留存的样本与图片 |
+| GET | `audit/dataset` | 数据集状态与样本预览 |
+| POST | `audit/dataset/export` | 导出数据集 |
+| POST | `audit/dataset/delete` | 删除单条留存记录 |
+| POST | `audit/dataset/clear` | 清空留存样本与图片 |
 
 ---
 
-## 🔗 与黑名单插件的兼容
+## 🔗 与黑名单插件兼容
 
-若同时安装了 [AstrBot-ban-Plugins](https://github.com/dahetaoa/AstrBot-ban-Plugins)，需要注意它的工作原理：该插件通过 `event.stop_event()` 中断事件传播，而 AstrBot 的事件派发在遇到已停止的事件时会**跳过后续所有插件**——所以只要本插件的处理器排在它之后，就会完全收不到消息，表现为「被 ban 的用户发图不再被审核」。
+同时安装 [AstrBot-ban-Plugins](https://github.com/dahetaoa/AstrBot-ban-Plugins) 时要注意：它通过 `event.stop_event()` 中断事件，AstrBot 会跳过后续插件。因此本插件把处理器优先级设为 `priority=100`，先收到消息，且从不调用 `stop_event()`。
 
-本插件已做两层处理：
-
-1. **提高处理器优先级**（`priority=100`）：本插件会先于拦截类插件收到消息，不再被饿死。本插件从不调用 `stop_event()`，因此不会影响其它插件。
-2. **可选的行为对齐**（`skip_audit_for_banned`，默认关闭）：开启后，本插件会直接读取黑名单插件的 `sp` 存储，命中全局/群禁用（含群内例外）时同样跳过审核；关闭时被禁用户的图片**仍会被审核**。
-
-默认保持「仍审核」的理由：审核是静默动作——不回复用户、不产生任何消息，因此不违背「禁用 bot」的本意，同时避免被禁用户借机发送违规图片。若你希望被禁用户完全不被处理，把该项打开即可。
+`skip_audit_for_banned` 默认关闭：被黑名单禁用的用户发图仍会被静默审核。审核不回复用户、不产生消息，不违背“禁用 bot”的本意，也能避免被禁用户借机发违规图片。开启后，本插件会读取黑名单插件的 `sp` 存储，命中全局/群禁用（含群内例外）时跳过审核。
 
 ---
 
 ## 🛠️ 依赖与安装
 
-1.  **AstrBot**: 建议升级至最新版。
-2.  **协议端**: 必须使用 **NapCat** 或 **Lagrange** (OneBot 11)。
-    * *注意：必须给予 Bot 管理员权限，否则无法撤回和禁言。*
-3.  **Python 依赖**: 需要安装 `Pillow`，用于把超过 1MB 的图片压缩后再送审。
-4.  **安装方法**:
-    将插件文件夹放入 `data/plugins/` 目录，重启 AstrBot 即可。
+1. **AstrBot**：建议使用最新版。
+2. **协议端**：NapCat 或 Lagrange（OneBot 11）。Bot 需要管理员权限，否则无法撤回和禁言。
+3. **Python 依赖**：`Pillow`，用于压缩超过 1 MB 的图片。
+4. **安装**：把插件目录放入 `data/plugins/`，重启 AstrBot。
 
-## ❓ 常见问题 (FAQ)
+## ❓ 常见问题
 
-**Q: 为什么 Bot 没反应？**
-A: 
-1. 检查是否开启了 `group_scope`（填 `0` 全开）。
-2. GIF 会压缩后发送给模型；如果模型或供应商不支持 GIF，请检查后台日志中的接口报错。
-3. 检查后台日志，看 LLM 是否报错。
+**Q: Bot 没反应？**
+A: 先检查 `group_scope` 是否添加了目标群号（或填 `0` 全开，默认不启用）；再看日志里 GIF 是否被供应商拒绝、LLM 是否报错。
 
-**Q: 为什么撤回/禁言失败？**
-A: 
-1. Bot 在群里是管理员吗？
-2. 你的协议端（NapCat）是否正常连接？
-3. 如果失败，Bot 会私聊管理员发战报，状态栏会显示 `❌`。
+**Q: 撤回/禁言失败？**
+A: 检查 Bot 是否为群管理员、NapCat 是否正常连接；失败时 Bot 会私聊管理员发战报，状态栏会显示 `❌`。
 
-**Q: 为什么识别不准？**
-
-A: 请更换更强的模型（推荐 Gemini Pro 系列），并在配置中优化 `custom_vision_prompt` 引导词。
+**Q: 识别不准？**
+A: 换用更强的多模态模型，并把 `custom_vision_prompt` 和 `forbidden_descriptions` 写得更具体。宽泛的地域、主题类描述容易误判。

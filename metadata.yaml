@@ -2,7 +2,7 @@ name: astrbot_plugin_image_guard
 version: 1.13.0
 display_name: 图片内容审查卫士
 desc: 基于多模态 LLM 的图片内容审查卫士。v1.13.0 新增「留存prompt」开关：把送审图片 base64、完整提示词与模型返回连同模型标签落盘，一键导出为本地模型微调数据集。
-author: YEZI
+author: mmyddd
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
 # Python 依赖：pillow (PIL)、httpx
 # 通过 AstrBot Dashboard 或 pip install pillow httpx 安装
