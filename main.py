@@ -34,8 +34,6 @@ _MAX_AUDIT_TAGS = 8
 _MAX_AUDIT_TAG_LENGTH = 24
 
 # ── 插件页 API 元数据 ──
-PAGE_LIST_LIMIT = 1000
-"""审核历史 API 单次最多返回的记录条数，避免大历史拖垮页面。"""
 CONNECTIVITY_TEST_TIMEOUT = 20.0
 """供应商连通性测试的超时时间（秒）。"""
 SUPPORTED_PROVIDER_TEMPLATES = ("openai_compatible", "modelscope", "astrbot_provider")
@@ -1384,7 +1382,6 @@ class ImageGuard(Star):
             if isinstance(record, dict):
                 record["tags"] = _normalize_audit_tags(record.get("tags"))
         total_records = len(records)
-        records = records[-PAGE_LIST_LIMIT:]
         stats = await self.get_kv_data("provider_stats", {})
         if not isinstance(stats, dict):
             stats = {}
@@ -1452,8 +1449,7 @@ class ImageGuard(Star):
             "audit_config": self._audit_config_summary(),
             "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_records": total_records,
-            "record_limit": PAGE_LIST_LIMIT,
-            "truncated": total_records > len(records),
+            "truncated": False,
         }
 
     async def _api_audit_clear(self):

@@ -220,7 +220,6 @@
       if (Array.isArray(response.pending)) state.pending = response.pending;
       state.auditConfig = response.audit_config || {};
       state.totalRecords = Number(response.total_records || state.records.length);
-      state.truncated = Boolean(response.truncated);
       state.serverTime = response.server_time || '';
       state.lastSyncAt = response.server_time || new Date().toISOString();
       if (state.selectedRecordId && !state.records.some(record => record.id === state.selectedRecordId)) {

@@ -134,7 +134,6 @@
     auditConfig: {},
     serverTime: '',
     totalRecords: 0,
-    truncated: false,
     fullConfig: {},
     configLoaded: false,
     configDirty: false,

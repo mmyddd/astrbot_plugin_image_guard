@@ -585,7 +585,7 @@
         : (state.records.length
           ? (total !== state.records.length
             ? '筛选出 ' + format.int(total) + ' / ' + format.int(state.records.length) + ' 条记录'
-            : '共 ' + format.int(state.totalRecords || state.records.length) + ' 条违规记录' + (state.truncated ? ' · 仅加载最近 ' + format.int(state.records.length) + ' 条' : ''))
+            : '共 ' + format.int(state.totalRecords || state.records.length) + ' 条违规记录')
           : '暂无历史记录');
     }
 
