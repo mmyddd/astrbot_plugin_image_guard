@@ -1,5 +1,6 @@
+
 /* ============================================================
-   ImageGuard · 应用编排
+   ImageGuard · 应用编排 v3
    路由 / 主题 / 数据刷新 / 启动
    ============================================================ */
 (function () {
@@ -13,8 +14,9 @@
   const state = IG.state;
   const toast = IG.toast;
 
-  const VIEWS = ['overview', 'records', 'settings'];
+  const VIEWS = ['overview', 'records', 'settings', 'wizard'];
   const SECTIONS = ['rules', 'providers', 'gate', 'scope', 'media', 'cache', 'dataset'];
+  const RECORD_TABS = ['all', 'pending', 'failed'];
 
   let statusTimer = 0;
   let lastHash = '';
@@ -45,20 +47,25 @@
   function parseHash() {
     const raw = String(window.location.hash || '').replace(/^#/, '');
     const parts = raw.split('?');
-    const path = parts[0] || '';
+    const segments = (parts[0] || '').split('/').filter(Boolean);
+    let view = segments[0] || 'overview';
+    if (view === 'settings' && segments[1] === 'wizard') view = 'wizard';
+    if (VIEWS.indexOf(view) < 0) view = 'overview';
     const params = new URLSearchParams(parts[1] || '');
-    const segments = path.split('/').filter(Boolean);
-    const view = VIEWS.indexOf(segments[0]) >= 0 ? segments[0] : 'overview';
-    let section = params.get('section') || 'rules';
-    if (SECTIONS.indexOf(section) < 0) section = 'rules';
-    const page = Math.max(1, Number(params.get('page') || segments[2] || 1) || 1);
+    let section = params.get('section') || 'scope';
+    if (SECTIONS.indexOf(section) < 0) section = 'scope';
+    const page = Math.max(1, Number(params.get('page') || 1) || 1);
+    const tab = params.get('tab') || '';
+    const recordId = view === 'records' && segments[1] ? decodeURIComponent(segments[1]) : '';
     return {
       view: view,
       section: section,
       page: page,
+      tab: tab,
       tag: params.get('tag') || '',
       query: params.get('q') || '',
-      status: params.get('status') || ''
+      status: params.get('status') || '',
+      recordId: recordId
     };
   }
 
@@ -66,15 +73,17 @@
     if (state.route.view === 'records') {
       const params = new URLSearchParams();
       if (state.route.page > 1) params.set('page', String(state.route.page));
+      if (state.recordsTab && state.recordsTab !== 'all') params.set('tab', state.recordsTab);
       if (state.tagFilter) params.set('tag', state.tagFilter);
-      if (state.statusFilter) params.set('status', state.statusFilter);
+      if (state.statusFilter && state.recordsTab !== 'failed') params.set('status', state.statusFilter);
       if (state.searchQuery.trim()) params.set('q', state.searchQuery.trim());
       const suffix = params.toString();
       return '#/records' + (suffix ? '?' + suffix : '');
     }
     if (state.route.view === 'settings') {
-      return '#/settings' + (state.route.section !== 'rules' ? '?section=' + state.route.section : '');
+      return '#/settings?section=' + state.route.section;
     }
+    if (state.route.view === 'wizard') return '#/wizard';
     return '#/' + state.route.view;
   }
 
@@ -93,40 +102,43 @@
     state.route.section = route.section;
     if (route.view === 'records') {
       state.route.page = route.page;
+      state.recordsTab = RECORD_TABS.indexOf(route.tab) >= 0 ? route.tab : 'all';
       state.tagFilter = route.tag;
-      state.statusFilter = route.status;
       state.searchQuery = route.query;
+      state.statusFilter = route.status || (state.recordsTab === 'failed' ? 'failed' : '');
+      if (route.recordId) state.selectedRecordId = route.recordId;
       const input = $('#rec-search');
       if (input && input.value !== route.query) input.value = route.query;
     }
     lastHash = currentHash();
 
     $$('[data-view-panel]').forEach(panel => {
-      const active = panel.dataset.viewPanel === route.view;
-      show(panel, active);
+      show(panel, panel.dataset.viewPanel === route.view);
     });
+    const activeNav = route.view === 'wizard' ? 'settings' : route.view;
     $$('[data-nav]').forEach(link => {
-      const active = link.dataset.nav === route.view;
+      const active = link.dataset.nav === activeNav;
       link.classList.toggle('is-active', active);
       if (active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
     $$('[data-section-tab]').forEach(tab => {
-      const active = route.view === 'settings' && tab.dataset.section === route.section;
+      const active = (route.view === 'settings' || route.view === 'wizard') && tab.dataset.section === route.section;
       tab.classList.toggle('is-active', active);
       if (active) tab.setAttribute('aria-current', 'true');
       else tab.removeAttribute('aria-current');
     });
     $$('[data-section-panel]').forEach(panel => {
-      const active = route.view === 'settings' && panel.dataset.sectionPanel === route.section;
-      IG.show(panel, active);
+      show(panel, route.view === 'settings' && panel.dataset.sectionPanel === route.section);
     });
 
+    if (route.view === 'overview') {
+      IG.views.renderOverview();
+    }
     if (route.view === 'records') {
-      if (loaded) IG.views.renderRecords();
+      IG.views.renderRecords();
     }
     if (route.view === 'settings') {
-      IG.settings.loadConfig(false);
       if (!state.configLoaded) {
         const label = $('#save-state');
         if (label) {
@@ -134,31 +146,38 @@
           label.dataset.state = '';
         }
       }
-      if (previousView !== 'settings') {
-        const main = $('#main');
-        if (main) window.requestAnimationFrame(() => main.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+      const pending = IG.settings.loadConfig(false);
+      if (pending && typeof pending.then === 'function') {
+        pending.then(() => IG.settings.renderSettingsNavMeta()).catch(() => {});
+      } else {
+        IG.settings.renderSettingsNavMeta();
+      }
+      if (previousView !== 'settings' && scroll) {
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
       }
     }
-    if (route.view === 'overview' && loaded) {
-      IG.views.renderOverview();
-    }
-    if (scroll) {
-      const main = $('#main');
-      if (main && previousView !== route.view) main.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (route.view === 'wizard') {
+      IG.settings.openWizard();
+      if (previousView !== 'wizard' && scroll) {
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      }
     }
     document.title = route.view === 'records'
       ? '审核记录 · ImageGuard'
       : route.view === 'settings'
         ? '配置中心 · ImageGuard'
-        : '审核概览 · ImageGuard';
+        : route.view === 'wizard'
+          ? '配置向导 · ImageGuard'
+          : '审核概览 · ImageGuard';
   }
 
   function handleHashChange() {
     const next = window.location.hash || '#/overview';
     if (next === lastHash) return;
     if (state.route.view === 'settings' && IG.settings.isDirty()) {
-      const previous = lastHash;
-      if (parseHash().view !== 'settings') {
+      const nextRoute = parseHash();
+      if (nextRoute.view !== 'settings') {
+        const previous = lastHash;
         window.history.replaceState(null, '', previous);
         IG.confirm({
           title: '未保存的修改',
@@ -168,7 +187,6 @@
           if (!ok) return;
           state.configDirty = false;
           if (state.fullConfig) IG.settings.fillForm(state.fullConfig);
-          lastHash = next;
           window.location.hash = next;
         });
         return;
@@ -181,8 +199,7 @@
   async function reloadRecords() {
     if (!IG.bridge.isEmbedded()) {
       setStatus('需要从 AstrBot 插件页打开', 'error');
-      IG.views.fillList($('#recent-list'), 'error', '页面未连接 AstrBot', '请从 AstrBot 面板的插件页进入本页面。');
-      IG.views.fillList($('#records-list'), 'error', '页面未连接 AstrBot', '请从 AstrBot 面板的插件页进入本页面。');
+      IG.views.setDataState('error', '请从 AstrBot 面板的插件页进入本页面。');
       return;
     }
     if (state.recordsLoading) return;
@@ -206,15 +223,18 @@
       state.truncated = Boolean(response.truncated);
       state.serverTime = response.server_time || '';
       state.lastSyncAt = response.server_time || new Date().toISOString();
+      if (state.selectedRecordId && !state.records.some(record => record.id === state.selectedRecordId)) {
+        state.selectedRecordId = '';
+      }
       IG.views.renderOverview();
       IG.views.renderRecords();
       IG.settings.refreshStorage();
+      IG.settings.renderSettingsNavMeta();
       setStatus('已同步 ' + format.int(state.records.length) + ' 条记录', 'success');
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       setStatus('同步失败', 'error');
-      IG.views.fillList($('#recent-list'), 'error', '审核数据加载失败', message);
-      IG.views.fillList($('#records-list'), 'error', '审核数据加载失败', message);
+      IG.views.setDataState('error', message);
       toast('加载失败：' + message, 'error');
     } finally {
       state.recordsLoading = false;
@@ -227,16 +247,14 @@
   let pendingTimer = 0;
   let pendingTicking = 0;
 
-  // 卡片上的"已用时"需要本地走动，否则两次轮询之间是静止的
   function startPendingTicker() {
     if (pendingTicking) return;
     pendingTicking = window.setInterval(() => {
       if (!state.pending.length) return;
       if (document.hidden) return;
-      const items = state.pending.map(item => Object.assign({}, item, {
+      state.pending = state.pending.map(item => Object.assign({}, item, {
         elapsed_seconds: (Number(item.elapsed_seconds) || 0) + 1
       }));
-      state.pending = items;
       IG.views.renderPending();
     }, 1000);
   }
@@ -258,7 +276,6 @@
         const response = await IG.api.pending() || {};
         state.pending = Array.isArray(response.pending) ? response.pending : [];
         IG.views.renderPending();
-        // 任务结束后补拉一次完整数据，让新记录立刻出现在列表里
         if (before > 0 && !state.pending.length) await reloadRecords();
       } catch (error) {
         // 轮询失败不打扰用户，等下一次
@@ -272,6 +289,7 @@
     pendingTimer = 0;
   }
 
+  /* ── 记录操作 ─────────────────────────────────────────── */
   async function deleteRecord(id) {
     if (!id) return;
     const ok = await IG.confirm({
@@ -284,7 +302,7 @@
       await IG.api.deleteRecord(id);
       state.records = state.records.filter(record => record.id !== id);
       state.totalRecords = Math.max(0, state.totalRecords - 1);
-      if (IG.views.currentDrawerId() === id) IG.views.closeDrawer();
+      if (state.selectedRecordId === id) state.selectedRecordId = '';
       IG.views.renderOverview();
       IG.views.renderRecords();
       toast('记录已删除', 'success');
@@ -308,6 +326,8 @@
       state.tagFilter = '';
       state.statusFilter = '';
       state.searchQuery = '';
+      state.recordsTab = 'all';
+      state.selectedRecordId = '';
       state.route.page = 1;
       const input = $('#rec-search');
       if (input) input.value = '';
@@ -330,6 +350,18 @@
     toast('已导出 ' + format.int(list.length) + ' 条记录', 'success');
   }
 
+  function openRecord(id) {
+    if (!id) return;
+    state.recordsTab = 'all';
+    state.statusFilter = '';
+    state.selectedRecordId = id;
+    if (state.route.view !== 'records') {
+      window.location.hash = '#/records';
+      return;
+    }
+    IG.views.renderRecords();
+  }
+
   function openPluginConfig() {
     try {
       window.parent.postMessage({
@@ -346,13 +378,15 @@
   /* ── 交互绑定 ─────────────────────────────────────────── */
   function bindGlobal() {
     $('#refresh-btn').addEventListener('click', reloadRecords);
-    $('#ov-refresh').addEventListener('click', reloadRecords);
+    const ovRefresh = $('#ov-refresh');
+    if (ovRefresh) ovRefresh.addEventListener('click', reloadRecords);
     $('#theme-toggle').addEventListener('click', () => {
       const dark = document.documentElement.getAttribute('data-theme') !== 'dark';
       IG.applyTheme(dark);
       toast(dark ? '已切换到深色主题' : '已切换到浅色主题', 'info');
     });
-    $('#open-plugin-config').addEventListener('click', openPluginConfig);
+    const pluginConfig = $('#open-plugin-config');
+    if (pluginConfig) pluginConfig.addEventListener('click', openPluginConfig);
 
     $$('[data-goto]').forEach(button => {
       button.addEventListener('click', () => {
@@ -376,7 +410,6 @@
     $$('#trend-range .seg-btn').forEach(button => {
       button.addEventListener('click', () => {
         state.trendRange = Number(button.dataset.range) || 14;
-        IG.views.renderTrendRange();
         IG.views.renderTrend();
       });
     });
@@ -396,11 +429,30 @@
     $$('#status-filter .chip').forEach(button => {
       button.addEventListener('click', () => {
         state.statusFilter = button.dataset.status || '';
+        state.recordsTab = state.statusFilter === 'failed' ? 'failed' : 'all';
         state.route.page = 1;
         syncRoute(true);
         IG.views.renderRecords();
       });
     });
+
+    $$('#records-tabs .list-tab').forEach(button => {
+      button.addEventListener('click', () => {
+        state.recordsTab = button.dataset.recTab || 'all';
+        state.statusFilter = state.recordsTab === 'failed' ? 'failed' : '';
+        state.route.page = 1;
+        syncRoute(true);
+        IG.views.renderRecords();
+      });
+    });
+
+    const tagToggle = $('#rec-tag-toggle');
+    if (tagToggle) {
+      tagToggle.addEventListener('click', () => {
+        state.tagBarOpen = !state.tagBarOpen;
+        IG.views.renderRecords();
+      });
+    }
 
     $('#rec-sort').addEventListener('click', () => {
       state.sortDesc = !state.sortDesc;
@@ -417,11 +469,10 @@
     $('#rec-export').addEventListener('click', exportRecords);
     $('#rec-clear').addEventListener('click', clearRecords);
 
-    const pendingToggle = $('#pending-toggle');
-    if (pendingToggle) {
-      pendingToggle.addEventListener('click', () => {
-        state.pendingCollapsed = !state.pendingCollapsed;
-        IG.views.renderPending();
+    const openWizard = $('#open-wizard');
+    if (openWizard) {
+      openWizard.addEventListener('click', () => {
+        window.location.hash = '#/wizard';
       });
     }
 
@@ -434,8 +485,6 @@
       }
     });
 
-    $('#drawer-close').addEventListener('click', IG.views.closeDrawer);
-    $('#drawer-scrim').addEventListener('click', IG.views.closeDrawer);
     $('#lightbox-close').addEventListener('click', IG.lightbox.close);
     $('#lightbox').addEventListener('click', event => {
       if (event.target === event.currentTarget) IG.lightbox.close();
@@ -443,10 +492,15 @@
 
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
-        if (IG.lightbox.isOpen()) IG.lightbox.close();
-        else if (!$('#provider-modal').hasAttribute('hidden')) IG.settings.closeProviderModal();
-        else if (IG.views.drawerOpen()) IG.views.closeDrawer();
-        else if (IG.isConfirmOpen()) IG.closeConfirm(false);
+        if (IG.lightbox.isOpen()) {
+          IG.lightbox.close();
+        } else if (!$('#provider-modal').hasAttribute('hidden')) {
+          IG.settings.closeProviderModal();
+        } else if (IG.isConfirmOpen()) {
+          IG.closeConfirm(false);
+        } else if (state.route.view === 'wizard') {
+          window.location.hash = '#/settings?section=scope';
+        }
         return;
       }
       if (event.key === 'r' && !event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -465,14 +519,6 @@
     });
   }
 
-  /* ── 深链接：打开具体记录 ─────────────────────────────── */
-  function openRecordFromHash() {
-    const match = String(window.location.hash || '').match(/^#\/records\/([^/?]+)/);
-    if (!match) return;
-    const id = decodeURIComponent(match[1]);
-    if (state.records.some(record => record.id === id)) IG.views.openDrawer(id);
-  }
-
   /* ── 启动 ─────────────────────────────────────────────── */
   function bootstrapBridge() {
     IG.bridge.ready().then(context => {
@@ -483,9 +529,14 @@
       setStatus('页面初始化失败', 'error');
     }).then(() => {
       applyRoute(false);
+      IG.views.setDataState('loading', '正在同步审核历史、供应商统计与本地图片。');
       return reloadRecords();
     }).then(() => {
-      openRecordFromHash();
+      const route = parseHash();
+      if (route.recordId) {
+        state.selectedRecordId = route.recordId;
+        IG.views.renderRecords();
+      }
       startPendingTicker();
       schedulePendingPoll();
     });
@@ -498,17 +549,11 @@
     const version = $('#brand-version');
     if (version) version.textContent = 'v1.13.0';
 
-    IG.views.fillList($('#recent-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');
-    IG.views.fillList($('#records-list'), 'loading', '正在读取审核记录…', '正在同步审核历史、供应商统计与本地图片。');
-
     if (!IG.bridge.isEmbedded()) {
       IG.applyTheme(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
       applyRoute(false);
       setStatus('请从 AstrBot 插件页打开', 'error');
-      IG.views.fillList($('#recent-list'), 'error', '未连接 AstrBot Bridge',
-        '本页面需要通过 AstrBot 面板的插件页进入，才能读取审核数据。');
-      IG.views.fillList($('#records-list'), 'error', '未连接 AstrBot Bridge',
-        '本页面需要通过 AstrBot 面板的插件页进入，才能读取审核数据。');
+      IG.views.setDataState('error', '本页面需要通过 AstrBot 面板的插件页进入，才能读取审核数据。');
       return;
     }
     bootstrapBridge();
@@ -521,7 +566,8 @@
     exportRecords: exportRecords,
     setStatus: setStatus,
     syncRoute: syncRoute,
-    applyRoute: applyRoute
+    applyRoute: applyRoute,
+    openRecord: openRecord
   };
 
   if (document.readyState === 'loading') {

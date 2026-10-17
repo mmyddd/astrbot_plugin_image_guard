@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" id="theme-color" content="#f5f6fa">
+<meta name="theme-color" id="theme-color" content="#f5f7fb">
 <title>ImageGuard · 审核控制台</title>
 <style id="boot-style">
-  html, body { margin: 0; background: #f5f6fa; color: #0f1520; }
-  html[data-theme="dark"], html[data-theme="dark"] body { background: #090c12; color: #e8edf6; }
+  html, body { margin: 0; background: #f5f7fb; color: #111827; }
+  html[data-theme="dark"], html[data-theme="dark"] body { background: #0b0f16; color: #e8edf6; }
 </style>
 <link rel="stylesheet" href="./style.css">
 </head>
@@ -16,7 +16,7 @@
 
 <div class="app">
   <header class="appbar">
-    <div class="appbar-inner">
+    <div class="shell appbar-inner">
       <a class="brand" href="#/overview">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -30,29 +30,10 @@
         </span>
       </a>
 
-      <nav class="nav-pills" aria-label="主导航">
-        <a class="nav-pill" href="#/overview" data-nav="overview">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="3.5" y="3.5" width="7" height="7" rx="2.2"></rect><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"></rect>
-            <rect x="3.5" y="13.5" width="7" height="7" rx="2.2"></rect><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"></rect>
-          </svg>
-          <span>概览</span>
-        </a>
-        <a class="nav-pill" href="#/records" data-nav="records">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 6.5h16M4 12h16M4 17.5h11"></path>
-          </svg>
-          <span>记录</span>
-          <span class="nav-badge" id="nav-record-count">—</span>
-        </a>
-        <a class="nav-pill" href="#/settings" data-nav="settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 7.5h14M5 12h14M5 16.5h14"></path><circle cx="9.5" cy="7.5" r="2"></circle>
-            <circle cx="15" cy="12" r="2"></circle><circle cx="8" cy="16.5" r="2"></circle>
-          </svg>
-          <span>配置</span>
-          <span class="nav-badge nav-badge-warn" id="nav-dirty" hidden>未保存</span>
-        </a>
+      <nav class="main-nav" aria-label="主导航">
+        <a class="nav-link" href="#/overview" data-nav="overview">概览</a>
+        <a class="nav-link" href="#/records" data-nav="records">记录 <span class="nav-count" id="nav-record-count">—</span></a>
+        <a class="nav-link" href="#/settings" data-nav="settings">配置 <span class="nav-dirty" id="nav-dirty" hidden>未保存</span></a>
       </nav>
 
       <div class="appbar-actions">
@@ -73,224 +54,215 @@
   </header>
 
   <main class="main" id="main" tabindex="-1">
-    <div class="container">
-      <!-- ══ 处理中 ══ -->
-      <section class="pending-strip" id="pending-strip" aria-live="polite" hidden>
-        <div class="pending-head">
-          <span class="pending-title">
-            <span class="pending-dot" aria-hidden="true"></span>
-            <strong id="pending-count">0 张图片正在审核</strong>
-          </span>
-          <span class="pending-note">命中违规会在此转为审核记录，判定安全的图片直接丢弃，不写入历史</span>
-          <button class="link-btn" type="button" id="pending-toggle" aria-expanded="true">收起</button>
-        </div>
-        <div class="pending-list" id="pending-list"></div>
-      </section>
+    <div class="shell">
 
-      <!-- ══ 概览 ══ -->
-      <section class="view" data-view-panel="overview" aria-labelledby="ov-title" hidden>
-        <header class="hero">
-          <div class="hero-text">
-            <h1 id="ov-title">审核概览</h1>
+      <!-- 概览 -->
+      <section class="view overview-view" data-view-panel="overview" aria-labelledby="ov-title" hidden>
+        <header class="page-head">
+          <div>
+            <span class="eyebrow">审核概览</span>
+            <h1 id="ov-title">图片审核概览</h1>
             <p id="ov-subtitle">正在同步审核数据…</p>
-            <div class="hero-pills" id="scope-summary">
-              <span class="meta-pill" data-tone="muted">正在读取配置…</span>
-            </div>
           </div>
-          <div class="hero-actions">
-            <button class="btn btn-ghost" type="button" id="ov-refresh">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.4-5.5"></path><path d="M19.5 5v4.5H15"></path></svg>
-              刷新数据
-            </button>
+          <div class="page-actions">
+            <button class="btn btn-ghost" type="button" id="ov-refresh">刷新数据</button>
             <button class="btn btn-primary" type="button" data-goto="records">查看全部记录</button>
           </div>
         </header>
 
-        <section class="kpi-band" aria-label="审核摘要">
-          <article class="kpi" data-tone="danger">
-            <span class="kpi-label">违规记录</span>
-            <strong class="kpi-value" id="stat-total">0</strong>
-            <span class="kpi-foot" id="stat-total-foot">等待数据</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-total-bar"></i></span>
-          </article>
-          <article class="kpi" data-tone="brand">
-            <span class="kpi-label">处置成功率</span>
-            <strong class="kpi-value" id="stat-dispose">—</strong>
-            <span class="kpi-foot" id="stat-dispose-foot">撤回与禁言执行情况</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-dispose-bar"></i></span>
-          </article>
-          <article class="kpi" data-tone="accent">
-            <span class="kpi-label">缓存跳过</span>
-            <strong class="kpi-value" id="stat-cache">0</strong>
-            <span class="kpi-foot" id="stat-cache-foot">唯一图片 0 张</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-cache-bar"></i></span>
-          </article>
-          <article class="kpi">
-            <span class="kpi-label">LLM 调用</span>
-            <strong class="kpi-value" id="stat-calls">0</strong>
-            <span class="kpi-foot" id="stat-calls-foot">尚未记录调用</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-calls-bar"></i></span>
-          </article>
-          <article class="kpi" data-tone="accent">
-            <span class="kpi-label">已审核图片</span>
-            <strong class="kpi-value" id="stat-audited">0</strong>
-            <span class="kpi-foot" id="stat-audited-foot">缓存跳过 0 · 抽查跳过 0</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-audited-bar"></i></span>
-          </article>
-          <article class="kpi" data-tone="brand">
-            <span class="kpi-label">审核用时</span>
-            <strong class="kpi-value" id="stat-duration">—</strong>
-            <span class="kpi-foot" id="stat-duration-foot">平均单张耗时</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-duration-bar"></i></span>
-          </article>
-          <article class="kpi" data-tone="success">
-            <span class="kpi-label">判定安全并丢弃</span>
-            <strong class="kpi-value" id="stat-safe">0</strong>
-            <span class="kpi-foot" id="stat-safe-foot">未写入历史记录</span>
-            <span class="kpi-line" aria-hidden="true"><i id="stat-safe-bar"></i></span>
-          </article>
-        </section>
-
-        <div class="bento">
-          <section class="card span-8" aria-labelledby="trend-title">
-            <header class="card-head">
-              <div>
-                <h2 class="card-title" id="trend-title">违规趋势</h2>
-                <p class="card-sub">按天统计的违规数量</p>
-              </div>
+        <section class="bento overview-bento" aria-label="审核概览">
+          <article class="tile tile-hero">
+            <div class="tile-head">
+              <span class="tile-label">违规记录</span>
               <div class="seg" id="trend-range" role="group" aria-label="趋势时间范围">
                 <button class="seg-btn" type="button" data-range="7">7 天</button>
                 <button class="seg-btn is-active" type="button" data-range="14">14 天</button>
                 <button class="seg-btn" type="button" data-range="30">30 天</button>
               </div>
-            </header>
-            <div class="card-body">
-              <div class="chart" id="trend-chart" role="img" aria-label="违规趋势图"></div>
             </div>
-          </section>
+            <div class="hero-value"><strong id="stat-total">0</strong><span>条违规</span><span class="hero-chip" id="stat-total-chip">今天 0 条</span></div>
+            <p class="tile-sub" id="stat-total-foot">暂无违规记录</p>
+            <div class="sparkbars" id="trend-chart" aria-hidden="true"></div>
+            <div class="spark-axis" id="trend-labels"></div>
+          </article>
 
-          <section class="card span-4" aria-labelledby="provider-title">
-            <header class="card-head">
-              <div>
-                <h2 class="card-title" id="provider-title">供应商命中</h2>
-                <p class="card-sub">累计成功调用占比</p>
-              </div>
-              <button class="link-btn" type="button" data-goto="settings" data-section="providers">管理</button>
-            </header>
-            <div class="card-body">
-              <div class="provider-scroll" id="provider-stats"></div>
-              <p class="provider-more" id="provider-more" hidden></p>
+          <article class="tile tile-safe">
+            <div class="tile-head"><span class="tile-label">判定安全</span><span class="tag">不写入历史</span></div>
+            <div class="safe-main">
+              <div class="safe-num"><strong id="stat-safe">0</strong><span>张图片</span><p id="safe-foot">占送审 0%</p></div>
+              <div class="safe-ring" id="safe-ring"><div><strong id="safe-percent">0%</strong><span>安全率</span></div></div>
             </div>
-          </section>
+            <p class="tile-note" id="safe-note">模型判定安全后直接丢弃，只保留缓存计数</p>
+          </article>
 
-          <section class="card span-7" aria-labelledby="recent-title">
-            <header class="card-head">
-              <div>
-                <h2 class="card-title" id="recent-title">最近违规</h2>
-                <p class="card-sub">最新 6 条审核记录</p>
-              </div>
-              <a class="link-btn" href="#/records">全部记录</a>
-            </header>
-            <div class="card-body">
-              <div class="feed" id="recent-list"></div>
-            </div>
-          </section>
+          <article class="tile tile-queue">
+            <div class="tile-head"><span class="tile-label">正在审核</span><span class="pill live" id="queue-count">0 个任务</span></div>
+            <div class="queue-list" id="queue-list"></div>
+            <a class="tile-link" href="#/records?tab=pending">查看实时队列 →</a>
+          </article>
 
-          <section class="card span-5" aria-labelledby="snapshot-title">
-            <header class="card-head">
-              <div>
-                <h2 class="card-title" id="snapshot-title">运行配置</h2>
-                <p class="card-sub">当前生效的规则与处置策略</p>
-              </div>
-              <button class="link-btn" type="button" data-goto="settings">调整</button>
-            </header>
-            <div class="card-body">
-              <div id="config-snapshot"></div>
-              <div class="health-block">
-                <span class="block-label">运行状态</span>
-                <div id="side-health"></div>
-              </div>
-            </div>
-          </section>
-        </div>
+          <article class="tile tile-disposal">
+            <div class="tile-head"><span class="tile-label">处置成功率</span><span class="tag">近 14 天</span></div>
+            <div class="tile-value"><strong id="stat-dispose">—</strong><span id="dispose-count">0 / 0 条</span></div>
+            <div class="segbar" id="dispose-bar" aria-hidden="true"></div>
+            <div class="tile-legend" id="dispose-legend"></div>
+          </article>
+
+          <article class="tile tile-savings">
+            <div class="tile-head"><span class="tile-label">节省模型调用</span></div>
+            <div class="tile-value"><strong id="stat-saved">0</strong><span>次</span></div>
+            <p class="tile-note" id="savings-breakdown">缓存 0 · 门控 0 · 抽查 0</p>
+            <div class="savings-bar" id="savings-bar" aria-hidden="true"></div>
+          </article>
+
+          <article class="tile tile-recent">
+            <div class="tile-head"><span class="tile-label">最近违规</span><a class="tile-link" href="#/records" data-goto="records">查看全部 →</a></div>
+            <div class="recent-list" id="recent-list"></div>
+          </article>
+
+          <article class="tile tile-policy">
+            <div class="tile-head"><span class="tile-label">当前策略</span><a class="tile-link" href="#/settings?section=scope">调整 →</a></div>
+            <div class="policy-list" id="config-snapshot"></div>
+            <div class="policy-health" id="policy-health"></div>
+          </article>
+        </section>
       </section>
 
-      <!-- ══ 记录 ══ -->
-      <section class="view" data-view-panel="records" aria-labelledby="rec-title" hidden>
-        <header class="hero">
-          <div class="hero-text">
+      <!-- 记录 -->
+      <section class="view records-view" data-view-panel="records" aria-labelledby="rec-title" hidden>
+        <header class="page-head">
+          <div>
+            <span class="eyebrow">审核记录</span>
             <h1 id="rec-title">审核记录</h1>
             <p id="rec-summary">正在读取历史记录…</p>
           </div>
-          <div class="hero-actions">
+          <div class="page-actions">
             <button class="btn btn-ghost" type="button" id="rec-export">导出 CSV</button>
-            <button class="btn btn-danger" type="button" id="rec-clear">清空历史</button>
+            <button class="btn btn-danger-ghost" type="button" id="rec-clear">清空历史</button>
           </div>
         </header>
 
-        <div class="filterbar">
-          <label class="search">
-            <span class="sr-only">搜索审核记录</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="6.4"></circle><path d="M15.8 15.8l4.4 4.4"></path>
-            </svg>
-            <input id="rec-search" type="search" placeholder="搜索用户、群号、理由或标签" autocomplete="off" spellcheck="false">
-          </label>
-          <div class="chip-row" id="status-filter" role="group" aria-label="处置状态筛选">
-            <button class="chip is-active" type="button" data-status="">全部</button>
-            <button class="chip" type="button" data-status="success">处置成功</button>
-            <button class="chip" type="button" data-status="partial">部分执行</button>
-            <button class="chip" type="button" data-status="failed">处置失败</button>
-          </div>
-          <div class="filterbar-tail">
-            <button class="btn btn-sm btn-ghost" type="button" id="rec-sort" aria-pressed="false">时间 · 新→旧</button>
-            <label class="select-wrap">
-              <span class="sr-only">每页条数</span>
-              <select class="select select-sm" id="rec-page-size">
-                <option value="10">10 / 页</option>
-                <option value="15" selected>15 / 页</option>
-                <option value="30">30 / 页</option>
-                <option value="50">50 / 页</option>
-              </select>
-            </label>
-          </div>
-        </div>
+        <section class="records-summary" aria-label="审核摘要">
+          <div class="summary-stat"><span>今日违规</span><strong id="rec-kpi-total">—</strong></div>
+          <div class="summary-stat"><span>判定安全</span><strong id="rec-kpi-safe">—</strong></div>
+          <div class="summary-stat"><span>处置成功率</span><strong id="rec-kpi-dispose">—</strong></div>
+          <div class="summary-stat"><span>平均用时</span><strong id="rec-kpi-duration">—</strong></div>
+          <div class="summary-stat"><span>正在审核</span><strong id="rec-kpi-pending">—</strong></div>
+          <div class="summary-spark" id="rec-spark" aria-hidden="true"></div>
+        </section>
 
-        <div class="tag-bar" id="tag-bar" hidden>
-          <span class="tag-bar-label">标签筛选</span>
-          <div class="chip-row chip-row-wrap" id="tag-filter"></div>
-        </div>
+        <div class="records-split">
+          <section class="records-list-pane" aria-label="记录列表">
+            <div class="list-pane-head">
+              <div class="list-tabs" id="records-tabs" role="tablist" aria-label="记录范围">
+                <button class="list-tab is-active" type="button" data-rec-tab="all">最近违规 <span id="rec-tab-all-count">—</span></button>
+                <button class="list-tab" type="button" data-rec-tab="pending">审核中 <span id="rec-tab-pending-count">—</span></button>
+                <button class="list-tab" type="button" data-rec-tab="failed">处置失败 <span id="rec-tab-failed-count">—</span></button>
+              </div>
+              <label class="search-field">
+                <span class="sr-only">搜索审核记录</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.4"></circle><path d="M15.8 15.8l4.4 4.4"></path></svg>
+                <input id="rec-search" type="search" placeholder="搜索用户、群号、理由或标签" autocomplete="off" spellcheck="false">
+              </label>
+              <div class="list-tools">
+                <div class="chip-row" id="status-filter" role="group" aria-label="处置状态筛选">
+                  <button class="chip is-active" type="button" data-status="">全部</button>
+                  <button class="chip" type="button" data-status="success">已处置</button>
+                  <button class="chip" type="button" data-status="partial">部分执行</button>
+                  <button class="chip" type="button" data-status="failed">失败</button>
+                </div>
+                <button class="btn btn-sm btn-ghost" type="button" id="rec-tag-toggle" aria-expanded="false" aria-controls="tag-bar">标签</button>
+                <button class="btn btn-sm btn-ghost" type="button" id="rec-sort" aria-pressed="false">时间 · 新→旧</button>
+              </div>
+              <div class="tag-filter" id="tag-bar" hidden>
+                <span class="tag-filter-label">标签</span>
+                <div class="chip-row chip-row-wrap" id="tag-filter"></div>
+              </div>
+            </div>
+            <div class="record-list" id="records-list"></div>
+            <footer class="list-pane-foot">
+              <nav class="pager" id="pager" aria-label="记录分页"></nav>
+              <label class="page-size">每页
+                <select class="select select-sm" id="rec-page-size">
+                  <option value="10">10</option>
+                  <option value="15" selected>15</option>
+                  <option value="30">30</option>
+                  <option value="50">50</option>
+                </select>
+              </label>
+            </footer>
+          </section>
 
-        <div class="feed feed-records" id="records-list"></div>
-        <nav class="pager" id="pager" aria-label="记录分页"></nav>
+          <section class="record-detail" id="record-detail" aria-live="polite">
+            <div class="detail-placeholder" id="detail-empty">
+              <span class="detail-placeholder-mark">⌕</span>
+              <strong>选择一条记录查看详情</strong>
+              <p>图片、判定理由、处置结果与处理轨迹会显示在这里。</p>
+            </div>
+            <div id="detail-content" hidden></div>
+          </section>
+        </div>
       </section>
 
-      <!-- ══ 配置 ══ -->
-      <section class="view" data-view-panel="settings" aria-labelledby="set-title" hidden>
-        <header class="hero">
-          <div class="hero-text">
+      <!-- 配置 -->
+      <section class="view settings-view" data-view-panel="settings" aria-labelledby="set-title" hidden>
+        <header class="page-head">
+          <div>
+            <span class="eyebrow">配置</span>
             <h1 id="set-title">配置中心</h1>
-            <p>改动先停留在页面，确认后写入插件配置并热重载。</p>
+            <p>改动先留在页面，确认后写入插件配置并热重载。</p>
           </div>
-          <div class="hero-actions">
+          <div class="page-actions">
+            <button class="btn btn-tonal" type="button" id="open-wizard">✦ 配置向导</button>
             <button class="btn btn-ghost" type="button" id="open-plugin-config">AstrBot 插件配置页</button>
             <button class="btn btn-ghost" type="button" id="set-reload">重新读取</button>
           </div>
         </header>
 
-        <nav class="tabs" id="settings-tabs" aria-label="配置分组">
-          <button class="tab-btn" type="button" data-section="rules" data-section-tab>审查规则</button>
-          <button class="tab-btn" type="button" data-section="providers" data-section-tab>LLM 供应商</button>
-          <button class="tab-btn" type="button" data-section="gate" data-section-tab>门控降本</button>
-          <button class="tab-btn" type="button" data-section="scope" data-section-tab>范围与处置</button>
-          <button class="tab-btn" type="button" data-section="media" data-section-tab>图片与调试</button>
-          <button class="tab-btn" type="button" data-section="cache" data-section-tab>缓存与存储</button>
-          <button class="tab-btn" type="button" data-section="dataset" data-section-tab>数据集留存</button>
-        </nav>
+        <div class="settings-layout">
+          <aside class="settings-nav" id="settings-tabs" aria-label="配置分组">
+            <div class="settings-nav-head">配置分组</div>
+            <button class="settings-nav-item" type="button" data-section="rules" data-section-tab>
+              <span class="settings-nav-num">01</span>
+              <span class="settings-nav-text"><strong>审查规则</strong><small>敏感文字与画面描述</small></span>
+              <span class="settings-nav-meta" data-nav-meta="rules">—</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-section="providers" data-section-tab>
+              <span class="settings-nav-num">02</span>
+              <span class="settings-nav-text"><strong>LLM 供应商</strong><small>按顺序尝试</small></span>
+              <span class="settings-nav-meta" data-nav-meta="providers">—</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-section="gate" data-section-tab>
+              <span class="settings-nav-num">03</span>
+              <span class="settings-nav-text"><strong>门控降本</strong><small>低成本预判</small></span>
+              <span class="settings-nav-meta" data-nav-meta="gate">—</span>
+            </button>
+            <button class="settings-nav-item is-active" type="button" data-section="scope" data-section-tab>
+              <span class="settings-nav-num">04</span>
+              <span class="settings-nav-text"><strong>范围与处置</strong><small>审查哪些会话</small></span>
+              <span class="settings-nav-meta" data-nav-meta="scope">—</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-section="media" data-section-tab>
+              <span class="settings-nav-num">05</span>
+              <span class="settings-nav-text"><strong>图片与调试</strong><small>压缩与日志</small></span>
+              <span class="settings-nav-meta" data-nav-meta="media">—</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-section="cache" data-section-tab>
+              <span class="settings-nav-num">06</span>
+              <span class="settings-nav-text"><strong>缓存与存储</strong><small>复用与清理</small></span>
+              <span class="settings-nav-meta" data-nav-meta="cache">—</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-section="dataset" data-section-tab>
+              <span class="settings-nav-num">07</span>
+              <span class="settings-nav-text"><strong>数据留存</strong><small>留存prompt</small></span>
+              <span class="settings-nav-meta" data-nav-meta="dataset">—</span>
+            </button>
+            <div class="settings-nav-foot"><i></i>保存后会自动热重载插件</div>
+          </aside>
 
-        <div class="settings-main">
-          <!-- 审查规则 -->
-          <section class="card" id="section-rules" data-section-panel="rules" aria-labelledby="rules-title">
+          <section class="settings-panel">
+<!-- 审查规则 -->
+          <section class="settings-section" hidden id="section-rules" data-section-panel="rules" aria-labelledby="rules-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="rules-title">审查规则</h2>
@@ -323,7 +295,7 @@
           </section>
 
           <!-- 供应商 -->
-          <section class="card" id="section-providers" data-section-panel="providers" aria-labelledby="providers-title">
+          <section class="settings-section" hidden id="section-providers" data-section-panel="providers" aria-labelledby="providers-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="providers-title">LLM 供应商</h2>
@@ -365,7 +337,7 @@
           </section>
 
           <!-- 范围与处置 -->
-          <section class="card" id="section-scope" data-section-panel="scope" aria-labelledby="scope-title">
+          <section class="settings-section" id="section-scope" data-section-panel="scope" aria-labelledby="scope-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="scope-title">范围与处置</h2>
@@ -373,29 +345,58 @@
               </div>
             </header>
             <div class="card-body">
-              <div class="inline-grid">
-                <div class="field">
-                  <div class="field-head">
-                    <label class="field-label" for="cfg-group_scope">启用审查的群号</label>
-                    <span class="field-hint">填 0 表示监听所有群</span>
+              <div class="scope-grid">
+                <div class="scope-field" data-scope="group">
+                  <div class="scope-field-head">
+                    <div><strong>群聊</strong><span>只审查你添加的群号</span></div>
+                    <div class="scope-mode" role="group" aria-label="群聊范围">
+                      <button type="button" data-scope-mode="specified" class="is-active">指定群号</button>
+                      <button type="button" data-scope-mode="all">全部群聊</button>
+                    </div>
                   </div>
-                  <textarea class="textarea textarea-sm" id="cfg-group_scope" rows="3" spellcheck="false"></textarea>
+                  <div class="scope-editor" data-scope-editor="group">
+                    <div class="token-list" data-scope-tokens="group"></div>
+                    <div class="token-add">
+                      <input class="input" type="text" inputmode="numeric" data-scope-input="group" placeholder="输入群号，点击添加" autocomplete="off">
+                      <button class="btn btn-sm btn-tonal" type="button" data-scope-add="group">添加</button>
+                    </div>
+                    <p class="field-hint" data-scope-note="group"></p>
+                  </div>
+                  <textarea id="cfg-group_scope" hidden></textarea>
                 </div>
-                <div class="field">
-                  <div class="field-head">
-                    <label class="field-label" for="cfg-private_scope">启用审查的私聊用户</label>
-                    <span class="field-hint">填 0 表示监听所有私聊</span>
+                <div class="scope-field" data-scope="private">
+                  <div class="scope-field-head">
+                    <div><strong>私聊</strong><span>只审查你添加的 QQ 号</span></div>
+                    <div class="scope-mode" role="group" aria-label="私聊范围">
+                      <button type="button" data-scope-mode="specified" class="is-active">指定用户</button>
+                      <button type="button" data-scope-mode="all">全部私聊</button>
+                    </div>
                   </div>
-                  <textarea class="textarea textarea-sm" id="cfg-private_scope" rows="3" spellcheck="false"></textarea>
+                  <div class="scope-editor" data-scope-editor="private">
+                    <div class="token-list" data-scope-tokens="private"></div>
+                    <div class="token-add">
+                      <input class="input" type="text" inputmode="numeric" data-scope-input="private" placeholder="输入 QQ 号，点击添加" autocomplete="off">
+                      <button class="btn btn-sm btn-tonal" type="button" data-scope-add="private">添加</button>
+                    </div>
+                    <p class="field-hint" data-scope-note="private"></p>
+                  </div>
+                  <textarea id="cfg-private_scope" hidden></textarea>
                 </div>
               </div>
-              <div class="field field-block">
+              <div class="field field-block" data-scope="whitelist">
                 <div class="field-head">
-                  <label class="field-label" for="cfg-audit_whitelist">审核白名单</label>
-                  <span class="field-hint" id="whitelist-hint">名单内用户的消息不审核、不记录，群聊与私聊均生效</span>
+                  <span class="field-label">审核白名单</span>
+                  <span class="field-hint">名单内用户的消息不审核、不记录，群聊与私聊均生效</span>
                 </div>
-                <textarea class="textarea textarea-sm" id="cfg-audit_whitelist" rows="3" spellcheck="false"
-                  placeholder="填写用户 QQ 号，每行一个"></textarea>
+                <div class="scope-editor" data-scope-editor="whitelist">
+                  <div class="token-list" data-scope-tokens="whitelist"></div>
+                  <div class="token-add">
+                    <input class="input" type="text" inputmode="numeric" data-scope-input="whitelist" placeholder="输入用户 QQ 号，点击添加" autocomplete="off">
+                    <button class="btn btn-sm btn-tonal" type="button" data-scope-add="whitelist">添加</button>
+                  </div>
+                  <p class="field-hint" data-scope-note="whitelist"></p>
+                </div>
+                <textarea id="cfg-audit_whitelist" hidden></textarea>
               </div>
               <div class="field">
                 <div class="field-head">
@@ -453,7 +454,7 @@
           </section>
 
           <!-- 图片与调试 -->
-          <section class="card" id="section-media" data-section-panel="media" aria-labelledby="media-title">
+          <section class="settings-section" hidden id="section-media" data-section-panel="media" aria-labelledby="media-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="media-title">图片与调试</h2>
@@ -499,7 +500,7 @@
           </section>
 
           <!-- 缓存与存储 -->
-          <section class="card" id="section-cache" data-section-panel="cache" aria-labelledby="cache-title">
+          <section class="settings-section" hidden id="section-cache" data-section-panel="cache" aria-labelledby="cache-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="cache-title">缓存与存储</h2>
@@ -548,7 +549,7 @@
           </section>
 
           <!-- 门控降本 -->
-          <section class="card" id="section-gate" data-section-panel="gate" aria-labelledby="gate-title">
+          <section class="settings-section" hidden id="section-gate" data-section-panel="gate" aria-labelledby="gate-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="gate-title">门控降本</h2>
@@ -661,7 +662,7 @@
             </div>
           </section>
           <!-- 数据集留存 -->
-          <section class="card" id="section-dataset" data-section-panel="dataset" aria-labelledby="dataset-title">
+          <section class="settings-section" hidden id="section-dataset" data-section-panel="dataset" aria-labelledby="dataset-title">
             <header class="card-head">
               <div>
                 <h2 class="card-title" id="dataset-title">数据集留存（留存prompt）</h2>
@@ -752,35 +753,147 @@
               </div>
             </div>
           </section>
-        </div>
-
-        <div class="save-bar" id="save-bar">
-          <span class="save-state" id="save-state" aria-live="polite">配置已是最新</span>
-          <div class="save-actions">
-            <button class="btn btn-ghost" type="button" id="set-revert">撤销修改</button>
-            <button class="btn btn-primary" type="button" id="set-save">保存并重载</button>
-          </div>
+            <div class="save-bar" id="save-bar">
+              <span class="save-state" id="save-state" aria-live="polite">配置已是最新</span>
+              <div class="save-actions">
+                <button class="btn btn-ghost" type="button" id="set-revert">撤销修改</button>
+                <button class="btn btn-primary" type="button" id="set-save">保存并重载</button>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
+
+      <!-- 配置向导 -->
+      <section class="view wizard-view" data-view-panel="wizard" aria-labelledby="wizard-title" hidden>
+        <header class="page-head">
+          <div>
+            <span class="eyebrow">配置</span>
+            <h1 id="wizard-title">配置向导</h1>
+            <p>按步骤完成最小可用配置，之后可以在完整设置里微调。</p>
+          </div>
+          <div class="page-actions"><button class="btn btn-ghost" type="button" id="wizard-exit">退出向导</button></div>
+        </header>
+
+        <div class="wizard-stepper" id="wizard-stepper">
+          <div class="wizard-step is-active" data-wizard-step-indicator="0"><span class="wizard-step-index"><span>1</span></span><div><strong>审查范围</strong><small>指定要审查的群与用户</small></div></div>
+          <span class="wizard-step-line"></span>
+          <div class="wizard-step" data-wizard-step-indicator="1"><span class="wizard-step-index"><span>2</span></span><div><strong>模型与降本</strong><small>主模型与门控</small></div></div>
+          <span class="wizard-step-line"></span>
+          <div class="wizard-step" data-wizard-step-indicator="2"><span class="wizard-step-index"><span>3</span></span><div><strong>处置与留存</strong><small>命中后做什么</small></div></div>
+        </div>
+
+        <div class="wizard-layout">
+          <section class="wizard-panel">
+            <div class="wizard-panel-head">
+              <div><span class="wizard-kicker" id="wizard-kicker">第 1 步 / 共 3 步</span><h2 id="wizard-heading">先指定要审查的群和私聊用户</h2><p id="wizard-sub">只有这里列出的会话会被审查；默认是“指定”，需要逐个添加。</p></div>
+              <button class="link-btn" type="button" id="wizard-advanced">高级设置 →</button>
+            </div>
+            <div class="wizard-body">
+              <div class="wizard-step-panel" data-wizard-panel="0">
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>群聊</h3><p>默认只审查你添加的群号。</p></div>
+
+<div class="scope-field" data-wizard-scope="group">
+  <div class="scope-mode" role="group" aria-label="群聊范围">
+    <button type="button" class="is-active" data-wizard-scope-mode="specified">指定群号</button>
+    <button type="button" data-wizard-scope-mode="all">全部群聊</button>
+  </div>
+  <div class="scope-editor">
+    <div class="token-list" data-wizard-scope-tokens="group"></div>
+    <div class="token-add">
+      <input class="input" type="text" inputmode="numeric" data-wizard-scope-input="group" placeholder="输入群号，点击添加" autocomplete="off">
+      <button class="btn btn-sm btn-tonal" type="button" data-wizard-scope-add="group">添加</button>
+    </div>
+    <p class="field-hint" data-wizard-scope-note="group"></p>
+  </div>
+</div>
+                </section>
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>私聊</h3><p>默认只审查你添加的 QQ 号。</p></div>
+
+<div class="scope-field" data-wizard-scope="private">
+  <div class="scope-mode" role="group" aria-label="私聊范围">
+    <button type="button" class="is-active" data-wizard-scope-mode="specified">指定用户</button>
+    <button type="button" data-wizard-scope-mode="all">全部私聊</button>
+  </div>
+  <div class="scope-editor">
+    <div class="token-list" data-wizard-scope-tokens="private"></div>
+    <div class="token-add">
+      <input class="input" type="text" inputmode="numeric" data-wizard-scope-input="private" placeholder="输入 QQ 号，点击添加" autocomplete="off">
+      <button class="btn btn-sm btn-tonal" type="button" data-wizard-scope-add="private">添加</button>
+    </div>
+    <p class="field-hint" data-wizard-scope-note="private"></p>
+  </div>
+</div>
+                </section>
+              </div>
+
+              <div class="wizard-step-panel" data-wizard-panel="1" hidden>
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>主审核模型</h3><p>从已配置的供应商里选一个优先使用。</p></div>
+                  <div class="wizard-provider-list" id="wizard-providers"></div>
+                </section>
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>门控降本</h3><p>用低成本模型先筛一遍，明显安全的图不再送大模型。</p></div>
+                  <label class="toggle" for="wizard-gate-enabled">
+                    <input type="checkbox" id="wizard-gate-enabled">
+                    <span class="toggle-track" aria-hidden="true"></span>
+                    <span class="toggle-text"><strong>启用 SystemOne 门控</strong><span>低于阈值的图片直接放行；门控结论不用于判罚。</span></span>
+                  </label>
+                  <div class="slider-row wizard-slider"><span>违规概率阈值</span><input class="slider" type="range" id="wizard-gate-threshold" min="5" max="95" step="1" value="30"><output class="slider-value" id="wizard-gate-value">30%</output></div>
+                  <p class="field-hint" id="wizard-gate-hint">约 30% 的图片会停在门控，不再产生大模型费用。</p>
+                </section>
+              </div>
+
+              <div class="wizard-step-panel" data-wizard-panel="2" hidden>
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>命中后的动作</h3><p>只对启用了审查的会话生效。</p></div>
+                  <label class="toggle" for="wizard-enable-recall">
+                    <input type="checkbox" id="wizard-enable-recall">
+                    <span class="toggle-track" aria-hidden="true"></span>
+                    <span class="toggle-text"><strong>撤回违规消息</strong><span>需要 Bot 具备群管理员权限。</span></span>
+                  </label>
+                  <div class="inline-grid wizard-grid">
+                    <div class="field"><div class="field-head"><label class="field-label" for="wizard-ban-duration">禁言时长（秒）</label><span class="field-hint">填 0 表示不禁言</span></div><input class="input" type="number" id="wizard-ban-duration" min="0" max="2592000" step="60" inputmode="numeric"></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="wizard-report-target">战报接收人</label><span class="field-hint">留空表示不转发</span></div><input class="input" type="text" id="wizard-report-target" inputmode="numeric" placeholder="例如 123456789"></div>
+                  </div>
+                </section>
+                <section class="wizard-group">
+                  <div class="wizard-group-head"><h3>数据留存</h3><p>可选，用于导出微调数据集。</p></div>
+                  <label class="toggle" for="wizard-dataset-enabled">
+                    <input type="checkbox" id="wizard-dataset-enabled">
+                    <span class="toggle-track" aria-hidden="true"></span>
+                    <span class="toggle-text"><strong>留存prompt</strong><span>把图片、提示词与模型返回落盘，用于本地微调。</span></span>
+                  </label>
+                </section>
+              </div>
+            </div>
+            <footer class="wizard-foot">
+              <button class="btn btn-ghost" type="button" id="wizard-prev">上一步</button>
+              <span id="wizard-progress">第 1 步 / 共 3 步</span>
+              <button class="btn btn-primary" type="button" id="wizard-next">下一步</button>
+            </footer>
+          </section>
+
+          <aside class="wizard-summary">
+            <span class="wizard-summary-label">配置预览</span>
+            <h3>保存后将启用</h3>
+            <div class="wizard-summary-list" id="wizard-summary"></div>
+            <div class="wizard-savings">
+              <div class="wizard-savings-head"><span>预计节省</span><strong id="wizard-saving-value">约 30%</strong></div>
+              <div class="wizard-savings-bar" aria-hidden="true"><i style="width:62%;background:var(--brand)"></i><i style="width:24%;background:var(--accent)"></i><i style="width:14%;background:var(--violet)"></i></div>
+              <small>门控放行 · 缓存跳过 · 抽查跳过</small>
+            </div>
+            <button class="btn btn-ghost" type="button" id="wizard-open-full">打开完整设置</button>
+            <p class="wizard-note">完成后会回到完整设置，确认无误再保存。</p>
+          </aside>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>
-
-<!-- 记录详情 -->
-<div class="scrim" id="drawer-scrim" hidden></div>
-<aside class="drawer" id="record-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
-  <header class="drawer-head">
-    <div>
-      <h2 id="drawer-title">记录详情</h2>
-      <p id="drawer-sub">—</p>
-    </div>
-    <button class="icon-btn" type="button" id="drawer-close" aria-label="关闭详情">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg>
-    </button>
-  </header>
-  <div class="drawer-body" id="drawer-body"></div>
-  <footer class="drawer-foot" id="drawer-foot"></footer>
-</aside>
 
 <!-- 图片预览 -->
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="审核图片预览" hidden>
@@ -873,6 +986,8 @@
 </div>
 
 <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+
 
 <script src="./js/data.js"></script>
 <script src="./js/views.js"></script>

@@ -85,6 +85,24 @@
     systemone_forbidden_descriptions: []
   };
   let reportTargets = [];
+  let fillingForm = false;
+  const SCOPE_IDS = { group: 'cfg-group_scope', private: 'cfg-private_scope', whitelist: 'cfg-audit_whitelist' };
+  const SCOPE_LABELS = { group: '群号', private: 'QQ 号', whitelist: '用户 QQ 号' };
+  const scopeStash = { group: [], private: [] };
+  const wizard = {
+    step: 0,
+    groupMode: 'specified',
+    group: [],
+    privateMode: 'specified',
+    private: [],
+    providerIndex: -1,
+    gateEnabled: false,
+    gateThreshold: 30,
+    recall: true,
+    banDuration: 86400,
+    reportTarget: '',
+    dataset: false
+  };
 
   /* 门控关闭时锁住覆盖项，避免误以为它们当前生效 */
   function syncGateLock() {
@@ -487,6 +505,7 @@
 
   /* ── 表单填充与读取 ───────────────────────────────────── */
   function fillForm(config) {
+    fillingForm = true;
     rules = {
       sensitive_texts: (config.sensitive_texts || []).slice(),
       forbidden_descriptions: (config.forbidden_descriptions || []).slice(),
@@ -503,6 +522,7 @@
     $('#cfg-private_scope').value = (config.private_scope || []).join('\n');
     $('#cfg-audit_whitelist').value = (config.audit_whitelist || []).join('\n');
     updateWhitelistHint();
+    syncScopeEditorsFromInputs();
 
     const probability = Number(config.check_probability);
     const prob = Number.isFinite(probability) ? probability : 1;
@@ -558,9 +578,11 @@
     state.providerStatus = {};
     renderProviders();
 
+    fillingForm = false;
     baseline = JSON.stringify(collectPatch({ includeProviders: false }));
     state.configDirty = false;
     updateDirtyUi();
+    renderSettingsNavMeta();
   }
 
   function valueOr(value, fallback) {
@@ -686,10 +708,11 @@
 
   /* ── 脏状态 ───────────────────────────────────────────── */
   function markDirty() {
-    if (!state.configLoaded || state.saving) return;
+    if (!state.configLoaded || state.saving || fillingForm) return;
     const current = JSON.stringify(collectPatch({ includeProviders: false }));
     state.configDirty = current !== baseline || providersChanged();
     updateDirtyUi();
+    renderSettingsNavMeta();
   }
 
   function providersChanged() {
@@ -746,8 +769,8 @@
         group_scope: state.fullConfig.group_scope,
         private_scope: state.fullConfig.private_scope
       });
-      IG.views.renderSnapshot();
-      IG.views.renderScopeSummary();
+      IG.views.renderPolicy();
+      renderSettingsNavMeta();
       await refreshStorage();
       await loadDataset();
       updateDirtyUi();
@@ -1082,10 +1105,594 @@
     }
   }
 
+
+  /* ── 作用域 chip 编辑器 ───────────────────────────────── */
+  function scopeTa(kind) {
+    return document.getElementById(SCOPE_IDS[kind]);
+  }
+
+  function scopeRoot(kind) {
+    return document.querySelector('[data-scope="' + kind + '"]');
+  }
+
+  function scopeValues(kind) {
+    const ta = scopeTa(kind);
+    return ta ? lines(ta.value) : [];
+  }
+
+  function scopeAll(kind) {
+    return scopeValues(kind).indexOf('0') >= 0;
+  }
+
+  function setScopeTa(kind, values) {
+    const ta = scopeTa(kind);
+    if (ta) ta.value = values.join('\n');
+  }
+
+  function renderScopeTokens(kind) {
+    const root = scopeRoot(kind);
+    if (!root) return;
+    const host = root.querySelector('[data-scope-tokens="' + kind + '"]');
+    if (!host) return;
+    const all = kind !== 'whitelist' && scopeAll(kind);
+    const values = all ? [] : scopeValues(kind);
+    if (all) {
+      host.innerHTML = '<span class="token-empty">当前审查全部</span>';
+      return;
+    }
+    host.innerHTML = values.length
+      ? values.map(value => '<span class="token">' + esc(value) +
+        ' <button type="button" data-scope-remove="' + esc(value) + '" aria-label="移除 ' + esc(value) + '">×</button></span>').join('')
+      : '<span class="token-empty">尚未添加</span>';
+  }
+
+  function updateScopeNote(kind) {
+    const root = scopeRoot(kind);
+    if (!root) return;
+    const note = root.querySelector('[data-scope-note="' + kind + '"]');
+    if (!note) return;
+    if (kind === 'whitelist') {
+      const count = scopeValues('whitelist').length;
+      note.textContent = count ? '已添加 ' + count + ' 位用户，群聊与私聊均生效。' : '未配置白名单。';
+      note.dataset.tone = count ? '' : 'warn';
+      return;
+    }
+    const all = scopeAll(kind);
+    const count = scopeValues(kind).filter(value => value !== '0').length;
+    if (all) {
+      note.textContent = kind === 'group'
+        ? '当前审查全部群聊。建议切换到“指定群号”，只审查需要的群。'
+        : '当前审查全部私聊。建议切换到“指定用户”。';
+      note.dataset.tone = 'warn';
+    } else if (count) {
+      note.textContent = kind === 'group'
+        ? count + ' 个群将被审查。'
+        : count + ' 个私聊用户将被审查。';
+      note.dataset.tone = '';
+    } else {
+      note.textContent = kind === 'group'
+        ? '未添加群号时不会审查任何群聊。'
+        : '未添加 QQ 号时不会审查任何私聊。';
+      note.dataset.tone = 'warn';
+    }
+  }
+
+  function setScopeModeUi(kind, mode) {
+    const root = scopeRoot(kind);
+    if (!root) return;
+    if (kind !== 'whitelist') root.dataset.mode = mode;
+    $$('[data-scope-mode]', root).forEach(button => {
+      const active = button.dataset.scopeMode === mode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    const all = kind !== 'whitelist' && mode === 'all';
+    const input = root.querySelector('[data-scope-input]');
+    const button = root.querySelector('[data-scope-add]');
+    if (input) {
+      input.disabled = all;
+      input.placeholder = all
+        ? '当前为全部，切换到指定后可添加'
+        : kind === 'group' ? '输入群号，点击添加' : '输入 QQ 号，点击添加';
+    }
+    if (button) button.disabled = all;
+    renderScopeTokens(kind);
+    updateScopeNote(kind);
+  }
+
+  function syncScopeEditorsFromInputs() {
+    ['group', 'private'].forEach(kind => {
+      scopeStash[kind] = scopeValues(kind).filter(value => value !== '0');
+      setScopeModeUi(kind, scopeAll(kind) ? 'all' : 'specified');
+    });
+    setScopeModeUi('whitelist', 'specified');
+  }
+
+  function addScopeValue(kind, rawValue) {
+    const value = String(rawValue || '').trim();
+    if (!value) return;
+    if (!/^\d{1,15}$/.test(value)) {
+      toast('请输入数字形式的' + SCOPE_LABELS[kind], 'error');
+      return;
+    }
+    if (kind !== 'whitelist' && scopeAll(kind)) {
+      setScopeMode(kind, 'specified');
+    }
+    const values = scopeValues(kind).filter(item => item !== '0');
+    if (values.indexOf(value) >= 0) {
+      toast('该值已存在', 'info');
+      return;
+    }
+    values.push(value);
+    setScopeTa(kind, values);
+    if (kind !== 'whitelist') scopeStash[kind] = values.slice();
+    setScopeModeUi(kind, 'specified');
+    markDirty();
+    const root = scopeRoot(kind);
+    const input = root ? root.querySelector('[data-scope-input]') : null;
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  }
+
+  function removeScopeValue(kind, value) {
+    const values = scopeValues(kind).filter(item => item !== '0' && item !== value);
+    setScopeTa(kind, values);
+    if (kind !== 'whitelist') scopeStash[kind] = values.slice();
+    renderScopeTokens(kind);
+    updateScopeNote(kind);
+    markDirty();
+  }
+
+  function setScopeMode(kind, mode) {
+    if (kind === 'whitelist') return;
+    const values = scopeValues(kind).filter(item => item !== '0');
+    if (mode === 'all') {
+      if (values.length) scopeStash[kind] = values.slice();
+      setScopeTa(kind, ['0']);
+    } else {
+      const restored = values.length ? values : (scopeStash[kind] || []);
+      setScopeTa(kind, restored);
+    }
+    setScopeModeUi(kind, mode);
+    markDirty();
+  }
+
+  function initScopeEditors() {
+    ['group', 'private', 'whitelist'].forEach(kind => {
+      const root = scopeRoot(kind);
+      if (!root) return;
+      root.addEventListener('click', event => {
+        const modeButton = event.target.closest('[data-scope-mode]');
+        if (modeButton) {
+          setScopeMode(kind, modeButton.dataset.scopeMode);
+          return;
+        }
+        const addButton = event.target.closest('[data-scope-add]');
+        if (addButton) {
+          const input = root.querySelector('[data-scope-input]');
+          addScopeValue(kind, input ? input.value : '');
+          return;
+        }
+        const removeButton = event.target.closest('[data-scope-remove]');
+        if (removeButton) removeScopeValue(kind, removeButton.dataset.scopeRemove);
+      });
+      const input = root.querySelector('[data-scope-input]');
+      if (input) {
+        input.addEventListener('keydown', event => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          addScopeValue(kind, input.value);
+        });
+      }
+    });
+  }
+
+  function renderSettingsNavMeta() {
+    const setMeta = (section, text, tone) => {
+      const node = document.querySelector('[data-nav-meta="' + section + '"]');
+      if (!node) return;
+      node.textContent = text;
+      node.classList.toggle('is-on', tone === 'on');
+      node.classList.toggle('is-warn', tone === 'warn');
+    };
+    const ruleCount = (rules.sensitive_texts || []).length + (rules.forbidden_descriptions || []).length;
+    setMeta('rules', ruleCount ? ruleCount + ' 条' : '—');
+    const providers = providerList();
+    setMeta('providers', providers.length ? providers.length + ' 个' : '回退', providers.length ? 'on' : 'warn');
+    const gate = $('#cfg-systemone_enabled');
+    setMeta('gate', gate && gate.checked ? '开启' : '关闭', gate && gate.checked ? 'on' : '');
+    const groupAll = scopeAll('group');
+    const groupCount = scopeValues('group').filter(value => value !== '0').length;
+    setMeta('scope', groupAll ? '全部' : groupCount ? groupCount + ' 群' : '未指定', groupAll ? '' : groupCount ? 'on' : 'warn');
+    const media = $('#cfg-compressed_image_max_bytes');
+    const mediaBytes = media ? Number(media.value) || 0 : 0;
+    setMeta('media', mediaBytes && mediaBytes !== 1048576 ? '已调整' : '默认', '');
+    const cacheEnabled = $('#cfg-audit_cache_enabled');
+    const cache = state.cacheStats || {};
+    setMeta('cache', cacheEnabled && cacheEnabled.checked
+      ? (Number(cache.total_unique_images) ? format.int(cache.total_unique_images) + ' 条' : '开启')
+      : '关闭', cacheEnabled && cacheEnabled.checked ? 'on' : '');
+    const dataset = $('#cfg-dataset_capture_enabled');
+    setMeta('dataset', dataset && dataset.checked ? '开启' : '关闭', dataset && dataset.checked ? 'on' : '');
+  }
+
+  /* ── 配置向导 ─────────────────────────────────────────── */
+  function wizardScopeRoot(kind) {
+    return document.querySelector('[data-wizard-scope="' + kind + '"]');
+  }
+
+  function renderWizardScope(kind) {
+    const root = wizardScopeRoot(kind);
+    if (!root) return;
+    const mode = wizard[kind + 'Mode'] || 'specified';
+    const all = mode === 'all';
+    root.dataset.mode = all ? 'all' : 'specified';
+    $$('[data-wizard-scope-mode]', root).forEach(button => {
+      const active = button.dataset.wizardScopeMode === mode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    const host = root.querySelector('[data-wizard-scope-tokens]');
+    const values = wizard[kind] || [];
+    if (host) {
+      host.innerHTML = all
+        ? '<span class="token-empty">当前审查全部</span>'
+        : values.length
+          ? values.map(value => '<span class="token">' + esc(value) +
+            ' <button type="button" data-wizard-scope-remove="' + esc(value) + '" aria-label="移除 ' + esc(value) + '">×</button></span>').join('')
+          : '<span class="token-empty">尚未添加</span>';
+    }
+    const input = root.querySelector('[data-wizard-scope-input]');
+    const add = root.querySelector('[data-wizard-scope-add]');
+    if (input) {
+      input.disabled = all;
+      input.placeholder = all
+        ? '当前为全部，切换到指定后可添加'
+        : kind === 'group' ? '输入群号，点击添加' : '输入 QQ 号，点击添加';
+    }
+    if (add) add.disabled = all;
+    const note = root.querySelector('[data-wizard-scope-note]');
+    if (note) {
+      if (all) {
+        note.textContent = kind === 'group'
+          ? '当前审查全部群聊。建议切换到“指定群号”，只审查需要的群。'
+          : '当前审查全部私聊。建议切换到“指定用户”。';
+        note.dataset.tone = 'warn';
+      } else if (values.length) {
+        note.textContent = kind === 'group'
+          ? values.length + ' 个群将被审查。'
+          : values.length + ' 个私聊用户将被审查。';
+        note.dataset.tone = '';
+      } else {
+        note.textContent = kind === 'group'
+          ? '未添加群号时不会审查任何群聊。'
+          : '未添加 QQ 号时不会审查任何私聊。';
+        note.dataset.tone = 'warn';
+      }
+    }
+  }
+
+  function renderWizardScopes() {
+    renderWizardScope('group');
+    renderWizardScope('private');
+  }
+
+  function addWizardScope(kind, rawValue) {
+    const value = String(rawValue || '').trim();
+    if (!value) return;
+    if (!/^\d{1,15}$/.test(value)) {
+      toast('请输入数字形式的' + SCOPE_LABELS[kind], 'error');
+      return;
+    }
+    if (wizard[kind + 'Mode'] === 'all') wizard[kind + 'Mode'] = 'specified';
+    if (wizard[kind].indexOf(value) >= 0) {
+      toast('该值已存在', 'info');
+      return;
+    }
+    wizard[kind].push(value);
+    renderWizardScope(kind);
+    renderWizardSummary();
+    const root = wizardScopeRoot(kind);
+    const input = root ? root.querySelector('[data-wizard-scope-input]') : null;
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  }
+
+  function removeWizardScope(kind, value) {
+    wizard[kind] = wizard[kind].filter(item => item !== value);
+    renderWizardScope(kind);
+    renderWizardSummary();
+  }
+
+  function wizardProviderName() {
+    const list = providerList();
+    if (wizard.providerIndex >= 0 && list[wizard.providerIndex]) return list[wizard.providerIndex].name || '未命名供应商';
+    return 'AstrBot 当前 Provider';
+  }
+
+  function renderWizardProviders() {
+    const host = $('#wizard-providers');
+    if (!host) return;
+    const list = providerList();
+    if (!list.length) {
+      wizard.providerIndex = -1;
+      host.innerHTML = '<button class="wizard-provider is-active" type="button" data-wizard-provider="-1">' +
+        '<span class="wizard-radio"></span><div><strong>AstrBot 当前 Provider</strong><p>复用 Dashboard 已配置的对话模型，无需填写密钥</p></div><span class="wizard-health"><i></i>可用</span></button>';
+      return;
+    }
+    if (wizard.providerIndex >= list.length) wizard.providerIndex = 0;
+    host.innerHTML = list.map((provider, index) => {
+      const active = index === wizard.providerIndex;
+      const model = provider.model || (TEMPLATE_LABELS[provider.__template_key] || 'OpenAI 兼容');
+      return '<button class="wizard-provider' + (active ? ' is-active' : '') + '" type="button" data-wizard-provider="' + index + '">' +
+        '<span class="wizard-radio"></span><div><strong>' + esc(provider.name || '未命名供应商') + (index === 0 ? ' <span class="tag">推荐</span>' : '') + '</strong><p>' + esc(model) + '</p></div><span class="wizard-health"><i></i>已配置</span></button>';
+    }).join('');
+  }
+
+  function renderWizardGate() {
+    const enabled = $('#wizard-gate-enabled');
+    const threshold = $('#wizard-gate-threshold');
+    const value = $('#wizard-gate-value');
+    const hint = $('#wizard-gate-hint');
+    if (enabled) enabled.checked = wizard.gateEnabled;
+    if (threshold) {
+      threshold.value = String(wizard.gateThreshold);
+      threshold.disabled = !wizard.gateEnabled;
+    }
+    if (value) value.textContent = wizard.gateThreshold + '%';
+    if (hint) {
+      hint.textContent = wizard.gateEnabled
+        ? '约 ' + wizard.gateThreshold + '% 的图片会停在门控，不再产生大模型费用。'
+        : '门控关闭时所有图片都会进入大模型。';
+    }
+  }
+
+  function renderWizardDisposal() {
+    const recall = $('#wizard-enable-recall');
+    const ban = $('#wizard-ban-duration');
+    const target = $('#wizard-report-target');
+    const dataset = $('#wizard-dataset-enabled');
+    if (recall) recall.checked = wizard.recall;
+    if (ban) ban.value = String(wizard.banDuration);
+    if (target) target.value = wizard.reportTarget;
+    if (dataset) dataset.checked = wizard.dataset;
+  }
+
+  function renderWizardSummary() {
+    const host = $('#wizard-summary');
+    if (!host) return;
+    const group = wizard.groupMode === 'all'
+      ? '全部群聊'
+      : (wizard.group.length ? wizard.group.length + ' 个群' : '未指定群');
+    const priv = wizard.privateMode === 'all'
+      ? '全部私聊'
+      : (wizard.private.length ? wizard.private.length + ' 个私聊' : '未指定私聊');
+    const gate = wizard.gateEnabled ? '开启 · 阈值 ' + wizard.gateThreshold + '%' : '关闭';
+    const disposal = (wizard.recall ? '撤回' : '不撤回') +
+      (wizard.banDuration > 0 ? ' + 禁言 ' + format.duration(wizard.banDuration) : ' · 不禁言');
+    const rows = [
+      ['审查范围', group + ' · ' + priv],
+      ['主审核模型', wizardProviderName()],
+      ['门控降本', gate],
+      ['命中后', disposal],
+      ['数据留存', wizard.dataset ? '开启' : '关闭']
+    ];
+    host.innerHTML = rows.map(row =>
+      '<div><span>' + esc(row[0]) + '</span><strong>' + esc(row[1]) + '</strong></div>'
+    ).join('');
+    const savingValue = $('#wizard-saving-value');
+    if (savingValue) savingValue.textContent = wizard.gateEnabled ? '约 ' + wizard.gateThreshold + '%' : '仅缓存';
+  }
+
+  function renderWizardStep() {
+    const step = Math.max(0, Math.min(2, wizard.step));
+    $$('[data-wizard-panel]').forEach(panel => {
+      panel.hidden = Number(panel.dataset.wizardPanel) !== step;
+    });
+    $$('[data-wizard-step-indicator]').forEach(indicator => {
+      const index = Number(indicator.dataset.wizardStepIndicator);
+      indicator.classList.toggle('is-active', index === step);
+      indicator.classList.toggle('is-done', index < step);
+      if (index === step) indicator.setAttribute('aria-current', 'step');
+      else indicator.removeAttribute('aria-current');
+    });
+    $$('.wizard-step-line').forEach((line, index) => {
+      line.classList.toggle('is-done', index < step);
+    });
+    const prev = $('#wizard-prev');
+    const next = $('#wizard-next');
+    if (prev) prev.disabled = step === 0;
+    if (next) next.textContent = step === 2 ? '完成并应用' : '下一步';
+    const kicker = $('#wizard-kicker');
+    const progress = $('#wizard-progress');
+    if (kicker) kicker.textContent = '第 ' + (step + 1) + ' 步 / 共 3 步';
+    if (progress) progress.textContent = '第 ' + (step + 1) + ' 步 / 共 3 步';
+    const copy = [
+      ['先指定要审查的群和私聊用户', '只有这里列出的会话会被审查；默认是“指定”，需要逐个添加。'],
+      ['选择审核模型，并决定要不要省成本', '先选一个主模型；门控会用低成本模型预判，明显安全的图片不再送大模型。'],
+      ['命中违规后做什么', '这些动作只对启用了审查的会话生效；保存后可以在完整设置里继续微调。']
+    ][step];
+    const heading = $('#wizard-heading');
+    const sub = $('#wizard-sub');
+    if (heading) heading.textContent = copy[0];
+    if (sub) sub.textContent = copy[1];
+  }
+
+  function renderWizard() {
+    renderWizardStep();
+    renderWizardScopes();
+    renderWizardProviders();
+    renderWizardGate();
+    renderWizardDisposal();
+    renderWizardSummary();
+  }
+
+  async function openWizard() {
+    if (!IG.bridge.isEmbedded()) return;
+    if (!state.configLoaded) await loadConfig(false);
+    if (!state.configLoaded) {
+      toast('配置尚未读取，暂时无法打开向导', 'error');
+      return;
+    }
+    const config = state.fullConfig || {};
+    const group = (config.group_scope || []).map(String);
+    const priv = (config.private_scope || []).map(String);
+    wizard.groupMode = group.indexOf('0') >= 0 ? 'all' : 'specified';
+    wizard.group = group.indexOf('0') >= 0 ? [] : group;
+    wizard.privateMode = priv.indexOf('0') >= 0 ? 'all' : 'specified';
+    wizard.private = priv.indexOf('0') >= 0 ? [] : priv;
+    wizard.providerIndex = providerList().length ? 0 : -1;
+    wizard.gateEnabled = truthy(config.systemone_enabled);
+    wizard.gateThreshold = Math.round((Number(config.systemone_violation_threshold) || 0.3) * 100);
+    wizard.recall = truthy(config.enable_recall);
+    wizard.banDuration = Number(config.ban_duration) || 0;
+    wizard.reportTarget = config.report_target_id || '';
+    wizard.dataset = truthy(config.dataset_capture_enabled);
+    wizard.step = 0;
+    renderWizard();
+  }
+
+  function leaveWizard() {
+    window.location.hash = '#/settings?section=scope';
+  }
+
+  function applyWizard() {
+    const group = $('#cfg-group_scope');
+    const priv = $('#cfg-private_scope');
+    if (group) group.value = wizard.groupMode === 'all' ? '0' : wizard.group.join('\n');
+    if (priv) priv.value = wizard.privateMode === 'all' ? '0' : wizard.private.join('\n');
+    syncScopeEditorsFromInputs();
+    const list = providerList().slice();
+    if (wizard.providerIndex > 0 && list[wizard.providerIndex]) {
+      const selected = list.splice(wizard.providerIndex, 1)[0];
+      list.unshift(selected);
+      state.providerDraft = list;
+      state.providerStatus = {};
+      renderProviders();
+    }
+    const gate = $('#cfg-systemone_enabled');
+    if (gate) gate.checked = wizard.gateEnabled;
+    const threshold = $('#cfg-systemone_violation_threshold');
+    if (threshold) threshold.value = String(wizard.gateThreshold / 100);
+    syncGateLock();
+    const recall = $('#cfg-enable_recall');
+    if (recall) recall.checked = wizard.recall;
+    const ban = $('#cfg-ban_duration');
+    if (ban) ban.value = String(wizard.banDuration);
+    const target = $('#cfg-report_target_id');
+    if (target) target.value = wizard.reportTarget;
+    const dataset = $('#cfg-dataset_capture_enabled');
+    if (dataset) dataset.checked = wizard.dataset;
+    syncDatasetLock();
+    if (wizard.dataset) loadDataset();
+    markDirty();
+    renderSettingsNavMeta();
+    toast('向导结果已填入，请确认后保存', 'success');
+    leaveWizard();
+  }
+
+  function initWizard() {
+    const prev = $('#wizard-prev');
+    const next = $('#wizard-next');
+    const exit = $('#wizard-exit');
+    const full = $('#wizard-open-full');
+    const advanced = $('#wizard-advanced');
+    if (prev) prev.addEventListener('click', () => {
+      if (wizard.step <= 0) return;
+      wizard.step -= 1;
+      renderWizardStep();
+    });
+    if (next) next.addEventListener('click', () => {
+      if (wizard.step < 2) {
+        wizard.step += 1;
+        renderWizardStep();
+      } else {
+        applyWizard();
+      }
+    });
+    [exit, full, advanced].forEach(button => {
+      if (button) button.addEventListener('click', leaveWizard);
+    });
+    ['group', 'private'].forEach(kind => {
+      const root = wizardScopeRoot(kind);
+      if (!root) return;
+      root.addEventListener('click', event => {
+        const mode = event.target.closest('[data-wizard-scope-mode]');
+        if (mode) {
+          wizard[kind + 'Mode'] = mode.dataset.wizardScopeMode;
+          renderWizardScope(kind);
+          renderWizardSummary();
+          return;
+        }
+        const add = event.target.closest('[data-wizard-scope-add]');
+        if (add) {
+          const input = root.querySelector('[data-wizard-scope-input]');
+          addWizardScope(kind, input ? input.value : '');
+          return;
+        }
+        const remove = event.target.closest('[data-wizard-scope-remove]');
+        if (remove) removeWizardScope(kind, remove.dataset.wizardScopeRemove);
+      });
+      const input = root.querySelector('[data-wizard-scope-input]');
+      if (input) input.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        addWizardScope(kind, input.value);
+      });
+    });
+    const providers = $('#wizard-providers');
+    if (providers) providers.addEventListener('click', event => {
+      const button = event.target.closest('[data-wizard-provider]');
+      if (!button) return;
+      wizard.providerIndex = Number(button.dataset.wizardProvider);
+      renderWizardProviders();
+      renderWizardSummary();
+    });
+    const gate = $('#wizard-gate-enabled');
+    if (gate) gate.addEventListener('change', () => {
+      wizard.gateEnabled = gate.checked;
+      renderWizardGate();
+      renderWizardSummary();
+    });
+    const threshold = $('#wizard-gate-threshold');
+    if (threshold) threshold.addEventListener('input', () => {
+      wizard.gateThreshold = Number(threshold.value) || 0;
+      renderWizardGate();
+      renderWizardSummary();
+    });
+    const recall = $('#wizard-enable-recall');
+    if (recall) recall.addEventListener('change', () => {
+      wizard.recall = recall.checked;
+      renderWizardSummary();
+    });
+    const ban = $('#wizard-ban-duration');
+    if (ban) ban.addEventListener('input', () => {
+      wizard.banDuration = Number(ban.value) || 0;
+      renderWizardSummary();
+    });
+    const target = $('#wizard-report-target');
+    if (target) target.addEventListener('input', () => {
+      wizard.reportTarget = target.value;
+      renderWizardSummary();
+    });
+    const dataset = $('#wizard-dataset-enabled');
+    if (dataset) dataset.addEventListener('change', () => {
+      wizard.dataset = dataset.checked;
+      renderWizardSummary();
+    });
+  }
+
   /* ── 初始化 ───────────────────────────────────────────── */
   function init() {
     mountRuleEditors();
     renderTemplates();
+    initScopeEditors();
+    initWizard();
+    renderSettingsNavMeta();
 
     $('#provider-add').addEventListener('click', () => openProviderModal(-1));
     $('#provider-modal-close').addEventListener('click', closeProviderModal);
@@ -1143,7 +1750,7 @@
     const datasetClear = $('#dataset-clear');
     if (datasetClear) datasetClear.addEventListener('click', clearDataset);
 
-    const form = $('#section-rules').closest('.settings-main');
+    const form = $('#section-rules').closest('.settings-panel');
     if (form) {
       form.addEventListener('input', event => {
         if (event.target.closest('#provider-list') || event.target.closest('#provider-modal')) return;
@@ -1166,6 +1773,9 @@
     loadDataset: loadDataset,
     syncDatasetLock: syncDatasetLock,
     isDirty() { return state.configDirty; },
-    fillForm: fillForm
+    fillForm: fillForm,
+    openWizard: openWizard,
+    renderSettingsNavMeta: renderSettingsNavMeta,
+    syncScopeEditors: syncScopeEditorsFromInputs
   };
 })();

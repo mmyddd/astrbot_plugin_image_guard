@@ -1,10 +1,8 @@
 {
   "group_scope": {
-    "description": "启用审查的群号列表。若包含 \"0\" 则监听所有群。若留空则不启用。",
+    "description": "启用审查的群号列表。默认不启用；请添加需要审查的群号。若包含 \"0\" 则监听所有群。",
     "type": "list",
-    "default": [
-      "0"
-    ],
+    "default": [],
     "items": {
       "type": "string"
     }

@@ -1,6 +1,7 @@
+
 /* ============================================================
-   ImageGuard · 视图层 v2
-   概览 / 记录卡片流 / 抽屉 / 图表 / 状态
+   ImageGuard · 视图层 v3
+   概览 Bento / 记录双栏 / 详情轨迹 / 实时队列
    ============================================================ */
 (function () {
   'use strict';
@@ -13,336 +14,51 @@
   const state = IG.state;
   const derive = IG.derive;
 
-  const PROVIDER_TOP_N = 8;
+  const ICON_IMAGE = '<svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M4.5 17l4.6-4.2 3.2 2.8 3.1-3 4.1 4"></path></svg>';
 
-  const ICON_IMAGE = '<svg class="thumb-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M4.5 17l4.6-4.2 3.2 2.8 3.1-3 4.1 4"></path></svg>';
+  /* ── 基础片段 ─────────────────────────────────────────── */
+  function setText(id, text) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = text;
+  }
 
-  /* ── 状态占位 ─────────────────────────────────────────── */
-  function stateMarkup(kind, title, message) {
+  function emptyState(kind, title, message) {
     const mark = kind === 'error' ? '!' : kind === 'loading' ? '···' : '∅';
-    return '<div class="state">' +
-      '<span class="state-mark" data-state="' + kind + '" aria-hidden="true">' + mark + '</span>' +
+    return '<div class="empty-state" data-tone="' + esc(kind) + '">' +
+      '<span class="empty-mark" aria-hidden="true">' + mark + '</span>' +
       '<strong>' + esc(title) + '</strong>' +
       '<p>' + esc(message) + '</p>' +
-      (kind === 'error' ? '<button class="btn btn-sm btn-tonal" type="button" data-retry>重新加载</button>' : '') +
       '</div>';
   }
 
-  function fillList(host, kind, title, message) {
-    if (!host) return;
-    host.innerHTML = stateMarkup(kind, title, message);
-    const retry = host.querySelector('[data-retry]');
-    if (retry) retry.addEventListener('click', () => IG.app.reloadRecords());
+  function statusBadge(status) {
+    const cls = status === 'success' ? 'badge-ok' : status === 'partial' ? 'badge-partial' : 'badge-fail';
+    return '<span class="badge ' + cls + '">' + esc(derive.disposeLabel(status)) + '</span>';
   }
 
-  /* ── 处理中任务 ───────────────────────────────────────── */
-  function renderPending() {
-    const strip = $('#pending-strip');
-    const list = $('#pending-list');
-    if (!strip || !list) return;
-    const items = derive.pendingItems();
-    const count = items.reduce((sum, item) => sum + (Number(item.image_count) || 1), 0);
-
-    if (!items.length) {
-      if (!strip.hasAttribute('hidden')) {
-        strip.setAttribute('hidden', '');
-        list.innerHTML = '';
-      }
-      state.pendingSince = 0;
-      return;
-    }
-
-    strip.removeAttribute('hidden');
-    strip.dataset.collapsed = state.pendingCollapsed ? '1' : '0';
-    const toggle = $('#pending-toggle');
-    if (toggle) {
-      toggle.textContent = state.pendingCollapsed ? '展开' : '收起';
-      toggle.setAttribute('aria-expanded', state.pendingCollapsed ? 'false' : 'true');
-    }
-    const title = $('#pending-count');
-    if (title) {
-      title.textContent = format.int(items.length) + ' 个任务 · ' + format.int(count) + ' 张图片正在审核';
-    }
-
-    if (state.pendingCollapsed) {
-      list.innerHTML = '';
-      return;
-    }
-
-    list.innerHTML = items.map(item => {
-      const who = item.user_name || item.user_id || '未知用户';
-      const source = item.group_id ? '群 ' + item.group_id : '私聊';
-      const thumb = item.preview
-        ? '<span class="pending-thumb"><img alt="待审图片预览" src="' + esc(item.preview) + '"></span>'
-        : '<span class="pending-thumb"><span class="pending-thumb-empty"></span></span>';
-      return '<article class="pending-card" data-pending="' + esc(item.id || '') + '">' +
-        thumb +
-        '<div class="pending-main">' +
-        '<strong>' + esc(who) + ' · ' + esc(source) + '</strong>' +
-        '<div class="pending-meta"><span>' + format.int(item.image_count || 1) + ' 张图片</span>' +
-        '<span>已用时 ' + esc(format.elapsed(item.elapsed_seconds)) + '</span>' +
-        '<span>开始于 ' + esc(format.time(new Date(Date.now() - (Number(item.elapsed_seconds) || 0) * 1000))) + '</span></div>' +
-        '</div>' +
-        '<span class="pending-badge">审核中</span>' +
-        '</article>';
-    }).join('');
-    state.pendingSince = Date.now();
+  function sourceLabel(record) {
+    return record.group_id ? '群 ' + record.group_id : '私聊';
   }
 
-  /* ── KPI ──────────────────────────────────────────────── */
-  function renderStats() {
-    const records = state.records;
-    const total = records.length;
-    let recalled = 0;
-    let banned = 0;
-    let success = 0;
-    let latest = null;
-    let latestAt = 0;
-    records.forEach(record => {
-      if (record.recalled) recalled += 1;
-      if (record.banned) banned += 1;
-      if (derive.disposeStatus(record) === 'success') success += 1;
-      const parsed = format.parseTime(record.time);
-      const stamp = parsed ? parsed.getTime() : 0;
-      if (stamp >= latestAt) { latestAt = stamp; latest = record; }
-    });
-
-    const cache = state.cacheStats || {};
-    const unique = Number(cache.total_unique_images) || 0;
-    const skipped = Number(cache.images_skip_audit) || 0;
-    const provider = derive.providerEntries();
-    const cacheEnabled = Number(cache.threshold) > 0;
-
-    const setText = (id, text) => {
-      const node = document.getElementById(id);
-      if (node) node.textContent = text;
-    };
-    const setBar = (id, percent) => {
-      const node = document.getElementById(id);
-      if (node) node.style.width = Math.max(0, Math.min(100, percent)) + '%';
-    };
-
-    setText('stat-total', format.int(total));
-    setText('stat-total-foot', latest ? '最近一次 ' + format.relative(latest.time) : '暂无违规记录');
-    setBar('stat-total-bar', total > 0 ? 100 : 0);
-
-    if (total > 0) {
-      const rate = Math.round(success / total * 100);
-      setText('stat-dispose', rate + '%');
-      setText('stat-dispose-foot', '撤回 ' + format.int(recalled) + ' · 禁言 ' + format.int(banned));
-      setBar('stat-dispose-bar', rate);
-    } else {
-      setText('stat-dispose', '—');
-      setText('stat-dispose-foot', '撤回与禁言执行情况');
-      setBar('stat-dispose-bar', 0);
-    }
-
-    setText('stat-cache', format.int(skipped));
-    setText('stat-cache-foot', cacheEnabled
-      ? '唯一图片 ' + format.int(unique) + ' 张 · 阈值 ' + format.int(cache.threshold) + ' 次'
-      : '审核缓存已关闭');
-    setBar('stat-cache-bar', unique > 0 ? Math.round(skipped / unique * 100) : 0);
-
-    setText('stat-calls', format.int(provider.total));
-    if (provider.entries.length) {
-      const top = provider.entries[0];
-      const share = provider.total > 0 ? Math.round(top.count / provider.total * 100) : 0;
-      setText('stat-calls-foot', '主力 ' + top.name + ' · ' + share + '%');
-      setBar('stat-calls-bar', share);
-    } else {
-      setText('stat-calls-foot', '尚未记录调用');
-      setBar('stat-calls-bar', 0);
-    }
-
-    // ── 审核漏斗：送审了多少、跳过了多少、多少被判安全丢弃，以及单张平均用时 ──
-    const funnel = derive.auditFunnel();
-    if (funnel.hasData) {
-      setText('stat-audited', format.int(funnel.audited));
-      setText('stat-audited-foot',
-        '送审 ' + format.int(funnel.auditTotal) +
-        ' · 跳过 ' + format.int(funnel.skipped) +
-        (funnel.gateSkipped ? ' · 门控放行 ' + format.int(funnel.gateSkipped) : '') +
-        (funnel.noRules ? ' · 无规则 ' + format.int(funnel.noRules) : ''));
-      const skipRate = funnel.audited > 0 ? Math.round(funnel.skipped / funnel.audited * 100) : 0;
-      setBar('stat-audited-bar', skipRate);
-
-      // ── 审核用时 ──
-      if (funnel.msCount > 0) {
-        setText('stat-duration', format.ms(funnel.msAvg));
-        setText('stat-duration-foot',
-          '样本 ' + format.int(funnel.msCount) + ' 次 · 峰值 ' + format.ms(funnel.msMax));
-        // 进度条按 30 秒基准表示相对耗时，超过则封顶
-        setBar('stat-duration-bar', Math.min(100, funnel.msAvg / 30000 * 100));
-      } else {
-        setText('stat-duration', '—');
-        setText('stat-duration-foot', '尚无耗时样本');
-        setBar('stat-duration-bar', 0);
-      }
-
-      setText('stat-safe', format.int(funnel.safe));
-      setText('stat-safe-foot', funnel.auditTotal > 0
-        ? '占送审 ' + format.percent(funnel.safe / funnel.auditTotal * 100) + ' · 未写入历史'
-        : '未写入历史记录');
-      setBar('stat-safe-bar', funnel.auditTotal > 0
-        ? Math.round(funnel.safe / funnel.auditTotal * 100) : 0);
-    } else {
-      setText('stat-audited', format.int(funnel.audited));
-      setText('stat-audited-foot', '尚无审核统计');
-      setBar('stat-audited-bar', 0);
-      setText('stat-duration', '—');
-      setText('stat-duration-foot', '尚无耗时样本');
-      setBar('stat-duration-bar', 0);
-      setText('stat-safe', format.int(funnel.safe));
-      setText('stat-safe-foot', '未写入历史记录');
-      setBar('stat-safe-bar', 0);
-    }
-
-    renderPending();
-
-    const navCount = $('#nav-record-count');
-    if (navCount) navCount.textContent = state.totalRecords ? format.int(state.totalRecords) : '0';
+  function dateLabel(date) {
+    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+    return (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 星期' + weekdays[date.getDay()];
   }
 
-  /* ── 趋势图 ───────────────────────────────────────────── */
-  function renderTrend() {
-    const chart = $('#trend-chart');
-    if (!chart) return;
-    const series = derive.dailySeries(state.trendRange);
-    const max = series.reduce((acc, item) => Math.max(acc, item.value), 0);
-    chart.style.setProperty('--cols', String(series.length));
-    chart.innerHTML = series.map(item => {
-      const height = max > 0 ? Math.max(3, Math.round(item.value / max * 100)) : 3;
-      return '<div class="chart-col" data-empty="' + (item.value ? '0' : '1') + '">' +
-        '<div class="chart-bar-wrap">' +
-        '<div class="chart-bar" style="height:' + height + '%"><span class="chart-tip">' +
-        esc(item.label) + ' · ' + format.int(item.value) + ' 条</span></div></div>' +
-        '<span class="chart-axis">' + esc(item.label) + '</span></div>';
-    }).join('');
-    chart.setAttribute('aria-label', '最近 ' + state.trendRange + ' 天违规趋势，峰值 ' + format.int(max) + ' 条');
+  function isToday(value) {
+    const date = format.parseTime(value);
+    if (!date) return false;
+    const now = new Date();
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
   }
 
-  function renderTrendRange() {
-    $$('#trend-range .seg-btn').forEach(button => {
-      const active = Number(button.dataset.range) === state.trendRange;
-      button.classList.toggle('is-active', active);
-      button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
+  function timeOnly(value) {
+    const date = format.parseTime(value);
+    if (!date) return '—';
+    const pad = n => String(n).padStart(2, '0');
+    return pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
   }
 
-  /* ── 供应商统计 ───────────────────────────────────────── */
-  function renderProviderStats() {
-    const container = $('#provider-stats');
-    const more = $('#provider-more');
-    if (!container) return;
-    if (more) more.setAttribute('hidden', '');
-    const data = derive.providerEntries(PROVIDER_TOP_N);
-    if (!data.entries.length) {
-      container.innerHTML = '<div class="state state-inline">' +
-        '<span class="state-mark" aria-hidden="true">∅</span>' +
-        '<strong>暂无调用记录</strong><p>审核成功一次后，这里会显示各供应商的命中占比。</p></div>';
-      return;
-    }
-    container.innerHTML = data.entries.map((entry, index) => {
-      const percent = data.total > 0 ? Math.round(entry.count / data.total * 100) : 0;
-      return '<div class="provider-row">' +
-        '<div class="provider-name"><span class="provider-rank">' + (index + 1) + '</span>' +
-        '<span title="' + esc(entry.name) + '">' + esc(entry.name) + '</span></div>' +
-        '<strong class="provider-count">' + format.int(entry.count) + '</strong>' +
-        '<div class="provider-sub"><span class="provider-track"><i class="provider-fill" style="width:' + percent + '%"></i></span>' +
-        '<span class="provider-pct">' + percent + '%</span></div></div>';
-    }).join('');
-
-    if (more && data.truncated) {
-      more.textContent = '另有 ' + format.int(data.hiddenCount) + ' 个供应商未显示，占比按全部 ' +
-        format.int(data.allTotal) + ' 个供应商的 ' + format.int(data.total) + ' 次调用计算';
-      more.removeAttribute('hidden');
-    }
-  }
-
-  /* ── 配置快照 / 运行状态 / 顶栏标签 ───────────────────── */
-  function renderSnapshot() {
-    const container = $('#config-snapshot');
-    if (!container) return;
-    const config = state.auditConfig || {};
-    if (!config.rule_count && !config.provider_count && !state.configLoaded) {
-      container.innerHTML = '<div class="state state-inline"><span class="state-mark" aria-hidden="true">∅</span>' +
-        '<strong>尚未读取配置</strong><p>进入配置中心或刷新页面后会显示当前生效的策略。</p></div>';
-      return;
-    }
-    const groups = (config.group_scope || []).join('、');
-    const privateScope = (config.private_scope || []).join('、');
-    const providers = config.provider_names && config.provider_names.length
-      ? config.provider_names.join('、') + (config.provider_count > config.provider_names.length ? ' 等' : '')
-      : '回退 AstrBot Provider';
-    const rows = [
-      ['审查群范围', groups === '0' || !groups ? '全部群聊' : groups],
-      ['审查私聊', privateScope === '0' ? '全部私聊' : (privateScope || '未启用')],
-      ['审查规则', format.int(config.rule_count || 0) + ' 条'],
-      ['LLM 供应商', providers],
-      ['抽查概率', format.percent(Number(config.check_probability || 0) * 100)],
-      ['自动处置', (config.enable_recall ? '撤回消息 · ' : '不撤回 · ') + format.duration(config.ban_duration)],
-      ['战报转发', config.report_enabled ? '已配置接收目标' : '未配置'],
-      ['审核缓存', config.cache_enabled ? '已启用' : '已关闭'],
-      ['门控降本', config.gate_enabled
-        ? '已启用 · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)
-        : '已关闭'],
-      ['留存prompt', config.dataset_enabled ? '已开启 · 用于微调数据集' : '已关闭']
-    ];
-    container.innerHTML = '<div class="snapshot-list">' + rows.map(row =>
-      '<div class="snapshot-row"><span>' + esc(row[0]) + '</span><strong>' + esc(row[1]) + '</strong></div>'
-    ).join('') + '</div>' +
-      (state.truncated
-        ? '<p class="snapshot-note">历史记录超过单次返回上限，页面按最新 ' + format.int(state.records.length) + ' 条统计。</p>'
-        : '');
-  }
-
-  function renderSideHealth() {
-    const container = $('#side-health');
-    if (!container) return;
-    const provider = derive.providerEntries();
-    const cache = state.cacheStats || {};
-    const rows = [
-      ['违规记录', format.int(state.records.length) + ' 条', ''],
-      ['供应商', provider.entries.length ? provider.entries.length + ' 个' : '未配置', provider.entries.length ? '' : 'warn'],
-      ['缓存条目', format.int(cache.total_unique_images || 0) + ' 条', Number(cache.total_unique_images) > 0 ? '' : 'off'],
-      ['最近同步', state.lastSyncAt ? format.time(state.lastSyncAt) : '—', '']
-    ];
-    container.innerHTML = rows.map(row =>
-      '<div class="health-row"><span class="health-dot" data-state="' + row[2] + '">' + esc(row[0]) + '</span>' +
-      '<strong>' + esc(row[1]) + '</strong></div>'
-    ).join('');
-  }
-
-  function renderScopeSummary() {
-    const container = $('#scope-summary');
-    if (!container) return;
-    const config = state.auditConfig || {};
-    if (!config.group_scope && !state.configLoaded) {
-      container.innerHTML = '<span class="meta-pill" data-tone="muted">正在读取配置…</span>';
-      return;
-    }
-    const groups = (config.group_scope || []).join('、');
-    const whitelistCount = Number(config.whitelist_count) || 0;
-    const pills = [
-      { text: groups === '0' || !groups ? '群聊 · 全部' : '群聊 · ' + groups, tone: 'brand', title: '启用审查的群号' },
-      ...(whitelistCount
-        ? [{ text: '白名单 ' + format.int(whitelistCount) + ' 人', tone: 'muted', title: '名单内用户的消息不审核、不记录' }]
-        : []),
-      { text: format.int(config.rule_count || 0) + ' 条规则', tone: 'accent', title: '敏感文字与违规画面描述总量' },
-      { text: (config.provider_count || 0) + ' 个供应商', tone: config.provider_count ? 'muted' : 'warn', title: (config.provider_names || []).join('、') || '未配置供应商' },
-      { text: config.cache_enabled ? '缓存已启用' : '缓存已关闭', tone: config.cache_enabled ? 'muted' : 'warn', title: '审核缓存状态' },
-      { text: config.gate_enabled ? '门控已启用' : '门控已关闭', tone: config.gate_enabled ? 'muted' : 'off', title: config.gate_enabled ? ('门控模型 ' + (config.gate_model || '') + ' · 阈值 ' + format.percent(Number(config.gate_threshold || 0) * 100)) : '未开启低成本门控' },
-      ...(config.dataset_enabled
-        ? [{ text: '留存prompt 已开启', tone: 'warn', title: '正在把图片 base64、提示词与模型返回落盘为微调数据集' }]
-        : [])
-    ];
-    container.innerHTML = pills.map(pill =>
-      '<span class="meta-pill" data-tone="' + pill.tone + '" title="' + esc(pill.title) + '">' + esc(pill.text) + '</span>'
-    ).join('');
-  }
-
-  /* ── 记录卡片 ─────────────────────────────────────────── */
-  // 历史记录里的 image_url 可能是本地文件路径（无法在 iframe 中加载），只接受可访问的 URL。
   function imageSource(record) {
     const local = String(record.local_image_url || '');
     if (local) return local;
@@ -350,166 +66,332 @@
     return /^(https?:|data:|\/)/i.test(raw) ? raw : '';
   }
 
-  function thumbMarkup(record) {
-    const url = imageSource(record);
-    if (!url) {
-      return '<div class="thumb-col"><span class="thumb-meta">无图片</span></div>';
+  function thumbMarkup(url, extraClass) {
+    const cls = 'thumb' + (extraClass ? ' ' + extraClass : '');
+    if (!url) return '<span class="' + cls + '" aria-hidden="true">' + ICON_IMAGE + '</span>';
+    return '<span class="' + cls + '" data-preview="' + esc(url) + '" aria-hidden="true">' + ICON_IMAGE + '</span>';
+  }
+
+  function recordThumb(record) {
+    return thumbMarkup(imageSource(record));
+  }
+
+  function hydrateThumbs(host) {
+    if (!host) return;
+    $$('.thumb[data-preview]', host).forEach(span => {
+      const url = span.getAttribute('data-preview');
+      if (!url || span.dataset.hydrated === '1') return;
+      span.dataset.hydrated = '1';
+      IG.imageAsset.resolve(url).then(resolved => {
+        if (!resolved || !span.isConnected) return;
+        const img = document.createElement('img');
+        img.alt = '';
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = resolved;
+        img.addEventListener('error', () => {
+          span.classList.add('thumb-broken');
+          span.replaceChildren();
+        }, { once: true });
+        span.replaceChildren(img);
+      }).catch(() => {
+        span.classList.add('thumb-broken');
+        span.replaceChildren();
+      });
+    });
+  }
+
+  /* ── 概览 · Bento ─────────────────────────────────────── */
+  function pickLabels(series) {
+    if (!series.length) return [];
+    const indexes = [0, Math.floor((series.length - 1) / 3), Math.floor((series.length - 1) * 2 / 3), series.length - 1];
+    return indexes.filter((value, index, arr) => arr.indexOf(value) === index).map(i => series[i].label);
+  }
+
+  function renderTrend() {
+    const series = derive.dailySeries(state.trendRange);
+    const max = series.reduce((acc, item) => Math.max(acc, item.value), 0);
+    const host = $('#trend-chart');
+    if (!host) return;
+    host.innerHTML = series.map((item, index) => {
+      const height = item.value ? Math.max(6, Math.round(item.value / Math.max(max, 1) * 100)) : 2;
+      let cls = 'mini-bar';
+      if (!item.value) cls += ' is-zero';
+      else if (index === series.length - 1) cls += ' is-today';
+      return '<span class="' + cls + '" style="--h:' + height + '%"></span>';
+    }).join('');
+    const labels = $('#trend-labels');
+    if (labels) labels.innerHTML = pickLabels(series).map(label => '<span>' + esc(label) + '</span>').join('');
+    const range = $('#trend-range');
+    if (range) {
+      $$('.seg-btn', range).forEach(button => {
+        const active = Number(button.dataset.range) === state.trendRange;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
     }
-    const size = record.local_image_size
-      ? format.bytes(record.local_image_size)
-      : (record.local_image_url ? '' : '远程');
-    return '<div class="thumb-col">' +
-      '<button class="thumb" type="button" data-preview="' + esc(url) + '" data-caption="' +
-      esc((record.user_name || record.user_id || '') + ' · ' + format.fullTime(record.time)) + '" aria-label="预览审核图片">' +
-      ICON_IMAGE + '</button>' +
-      (size ? '<span class="thumb-meta" data-size="' + esc(size) + '">' + esc(size) + '</span>' : '') +
-      '</div>';
   }
 
-  function disposeBadges(record) {
-    const wantedBan = Number(record.ban_duration) > 0;
-    const parts = ['<span class="badge ' + (record.recalled ? 'badge-ok' : 'badge-fail') + '">' +
-      (record.recalled ? '已撤回' : '撤回失败') + '</span>'];
-    if (wantedBan) {
-      parts.push('<span class="badge ' + (record.banned ? 'badge-ok' : 'badge-fail') + '">' +
-        (record.banned ? '已禁言' : '禁言失败') + '</span>');
-    } else {
-      parts.push('<span class="badge badge-idle">未禁言</span>');
-    }
-    return parts.join('');
-  }
-
-  function recordCard(record, compact) {
-    const status = derive.disposeStatus(record);
-    const time = format.time(record.time);
-    const pieces = time.split(' ');
-    const user = record.user_name || record.user_id || '未知用户';
-    const userId = record.user_id || '';
-    const source = record.group_id ? '群 ' + record.group_id : '私聊';
-    const reason = record.reason || '未说明理由';
-    const tags = (record.tags || []).slice(0, compact ? 3 : 6);
-    const tagsHtml = tags.length
-      ? '<div class="tag-list">' + tags.map(tag =>
-        '<span class="tag" title="' + esc(tag) + '">' + esc(tag) + '</span>').join('') + '</div>'
-      : '';
-
-    return '<article class="record" data-state="' + status + '" data-detail="' + esc(record.id || '') + '" tabindex="0" role="button" ' +
-      'aria-label="' + esc(user + ' · ' + derive.disposeLabel(status) + ' · ' + reason) + '">' +
-      '<div class="record-time"><strong>' + esc(pieces[0] || time) + '</strong>' +
-      (pieces[1] ? '<span>' + esc(pieces[1]) + '</span>' : '') +
-      '<span>' + esc(format.relative(record.time)) + '</span></div>' +
-      '<div class="record-main">' +
-      '<div class="record-user"><span title="' + esc(user) + '">' + esc(user) + '</span>' +
-      '<span class="record-uid">' + esc(userId) + '</span>' +
-      '<span class="record-source">' + esc(source) + '</span>' +
-      (Number(record.audit_ms) > 0
-        ? '<span class="record-cost" title="本次审核调用模型的耗时">' + esc(format.ms(record.audit_ms)) + '</span>'
-        : '') +
-      '</div>' +
-      '<p class="record-reason" title="' + esc(reason) + '">' + esc(reason) + '</p>' +
-      tagsHtml +
-      '</div>' +
-      thumbMarkup(record) +
-      '<div class="record-actions">' +
-      '<div class="badge-stack">' + disposeBadges(record) + '</div>' +
-      '<div class="record-ops">' +
-      '<button class="btn btn-sm btn-ghost" type="button" data-detail-btn="' + esc(record.id || '') + '">详情</button>' +
-      '<button class="btn btn-sm btn-danger" type="button" data-delete="' + esc(record.id || '') + '">删除</button>' +
-      '</div></div></article>';
-  }
-
-  /* ── 概览 ─────────────────────────────────────────────── */
-  function renderOverview() {
-    renderStats();
+  function renderHero() {
+    const total = state.records.length;
+    const today = state.records.filter(record => isToday(record.time)).length;
+    const latest = state.records.reduce((acc, record) => {
+      const stamp = format.parseTime(record.time);
+      if (!stamp) return acc;
+      return !acc || stamp > acc.stamp ? { record: record, stamp: stamp } : acc;
+    }, null);
+    setText('stat-total', format.int(total));
+    setText('stat-total-chip', '今天 ' + format.int(today) + ' 条');
+    setText('stat-total-foot', latest ? '最近一次 ' + format.relative(latest.record.time) : '暂无违规记录');
     renderTrend();
-    renderTrendRange();
-    renderProviderStats();
-    renderSnapshot();
-    renderSideHealth();
-    renderScopeSummary();
+  }
 
-    const subtitle = $('#ov-subtitle');
-    if (subtitle) {
-      subtitle.textContent = state.records.length
-        ? '共 ' + format.int(state.totalRecords) + ' 条违规记录，本页展示最近 ' + format.int(state.records.length) +
-          ' 条 · 同步于 ' + (state.lastSyncAt ? format.time(state.lastSyncAt) : '刚刚')
-        : '暂无违规记录，命中违规后会自动生成审计条目';
+  function renderSafe() {
+    const funnel = derive.auditFunnel();
+    const safe = funnel.safe || 0;
+    const total = funnel.auditTotal || 0;
+    const percent = total > 0 ? Math.round(safe / total * 100) : 0;
+    setText('stat-safe', format.int(safe));
+    setText('safe-foot', total > 0 ? '占送审 ' + percent + '%' : '等待审核样本');
+    setText('safe-percent', percent + '%');
+    const ring = $('#safe-ring');
+    if (ring) ring.style.setProperty('--safe-p', percent + '%');
+    setText('safe-note', funnel.hasData
+      ? '模型判定安全后直接丢弃，只保留缓存计数'
+      : '还没有足够的审核样本，先让插件跑起来');
+  }
+
+  function renderQueue() {
+    const host = $('#queue-list');
+    if (!host) return;
+    const items = derive.pendingItems();
+    const images = items.reduce((sum, item) => sum + (Number(item.image_count) || 1), 0);
+    const count = $('#queue-count');
+    if (count) count.textContent = items.length ? (items.length + ' 个任务') : '0 个任务';
+    if (!items.length) {
+      host.innerHTML = '<div class="queue-empty"><strong>当前没有正在审核的任务</strong><span>新图片进入审核时会显示在这里。</span></div>';
+      return;
     }
+    host.innerHTML = items.slice(0, 3).map(item => {
+      const who = item.user_name || item.user_id || '未知用户';
+      const source = item.group_id ? '群 ' + item.group_id : '私聊';
+      const preview = item.preview ? thumbMarkup(item.preview) : thumbMarkup('');
+      return '<div class="queue-item">' +
+        preview +
+        '<div class="queue-body"><strong>' + esc(who) + '</strong><span>' + esc(source) + ' · ' + format.int(item.image_count || 1) + ' 张图片</span></div>' +
+        '<div class="queue-time"><strong>' + esc(format.elapsed(item.elapsed_seconds)) + '</strong><span>进行中</span></div>' +
+        '<div class="queue-progress"><i></i></div>' +
+        '</div>';
+    }).join('') +
+      (items.length > 3 ? '<p class="tile-sub" style="margin-top:6px">另有 ' + format.int(items.length - 3) + ' 个任务</p>' : '');
+    hydrateThumbs(host);
+    const imagesHint = $('#queue-count');
+    if (imagesHint && images > items.length) imagesHint.title = '共 ' + format.int(images) + ' 张图片正在审核';
+  }
 
+  function renderDisposal() {
+    const counts = { success: 0, partial: 0, failed: 0 };
+    state.records.forEach(record => { counts[derive.disposeStatus(record)] += 1; });
+    const total = state.records.length;
+    const rate = total > 0 ? Math.round(counts.success / total * 100) : 0;
+    setText('stat-dispose', total > 0 ? rate + '%' : '—');
+    setText('dispose-count', counts.success + ' / ' + total + ' 条');
+    const bar = $('#dispose-bar');
+    if (bar) {
+      bar.innerHTML = total > 0
+        ? '<i style="width:' + (counts.success / total * 100) + '%;background:var(--green)"></i>' +
+          '<i style="width:' + (counts.partial / total * 100) + '%;background:var(--amber)"></i>' +
+          '<i style="width:' + (counts.failed / total * 100) + '%;background:var(--red)"></i>'
+        : '<i style="width:100%;background:var(--line)"></i>';
+    }
+    const legend = $('#dispose-legend');
+    if (legend) {
+      legend.innerHTML =
+        '<span><b style="background:var(--green)"></b>成功 ' + counts.success + '</span>' +
+        '<span><b style="background:var(--amber)"></b>部分 ' + counts.partial + '</span>' +
+        '<span><b style="background:var(--red)"></b>失败 ' + counts.failed + '</span>';
+    }
+  }
+
+  function renderSavings() {
+    const funnel = derive.auditFunnel();
+    const saved = funnel.skipped || 0;
+    setText('stat-saved', format.int(saved));
+    setText('savings-breakdown', '缓存 ' + format.int(funnel.skippedCache) + ' · 门控 ' + format.int(funnel.gateSkipped) + ' · 抽查 ' + format.int(funnel.skippedProbability));
+    const bar = $('#savings-bar');
+    if (bar) {
+      const max = Math.max(funnel.skippedCache + funnel.gateSkipped + funnel.skippedProbability, 1);
+      bar.innerHTML = saved
+        ? '<i style="width:' + (funnel.skippedCache / max * 100) + '%;background:var(--brand)"></i>' +
+          '<i style="width:' + (funnel.gateSkipped / max * 100) + '%;background:var(--accent)"></i>' +
+          '<i style="width:' + (funnel.skippedProbability / max * 100) + '%;background:var(--violet)"></i>'
+        : '<i style="width:100%;background:var(--line)"></i>';
+    }
+  }
+
+  function renderRecent() {
     const host = $('#recent-list');
     if (!host) return;
     const recent = state.records.slice().sort((a, b) => {
       const ta = format.parseTime(a.time);
       const tb = format.parseTime(b.time);
       return (tb ? tb.getTime() : 0) - (ta ? ta.getTime() : 0);
-    }).slice(0, 6);
+    }).slice(0, 4);
     if (!recent.length) {
-      fillList(host, 'empty', '暂无违规记录', '当图片被判定为违规并执行处置后，记录会出现在这里。');
+      host.innerHTML = emptyState('empty', '暂无违规记录', '命中违规并执行处置后，记录会出现在这里。');
       return;
     }
-    host.innerHTML = recent.map(record => recordCard(record, true)).join('');
-    bindCards(host);
+    host.innerHTML = recent.map(record => {
+      const status = derive.disposeStatus(record);
+      return '<button class="recent-row" type="button" data-open-record="' + esc(record.id || '') + '">' +
+        recordThumb(record) +
+        '<span class="recent-body"><span class="recent-name"><strong>' + esc(record.user_name || record.user_id || '未知用户') + '</strong>' +
+        '<span>' + esc(sourceLabel(record)) + ' · ' + esc(format.relative(record.time)) + '</span></span>' +
+        '<span class="recent-reason">' + esc(record.reason || '未说明理由') + '</span></span>' +
+        '<span class="recent-side">' + statusBadge(status) + '<time>' + esc(format.ms(record.audit_ms)) + '</time></span>' +
+        '</button>';
+    }).join('');
     hydrateThumbs(host);
+    $$('[data-open-record]', host).forEach(button => {
+      button.addEventListener('click', () => IG.app.openRecord(button.dataset.openRecord));
+    });
   }
 
-  /* ── 记录页 ───────────────────────────────────────────── */
-  function renderRecords() {
-    const host = $('#records-list');
+  function renderPolicy() {
+    const host = $('#config-snapshot');
     if (!host) return;
-    const list = derive.filteredRecords();
-    const total = list.length;
-    const pageSize = state.pageSize;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const page = Math.min(Math.max(1, state.route.page), totalPages);
-    state.route.page = page;
-    const slice = list.slice((page - 1) * pageSize, page * pageSize);
-
-    const summary = $('#rec-summary');
-    if (summary) {
-      const filtered = total !== state.records.length;
-      summary.textContent = state.records.length
-        ? (filtered
-          ? '筛选出 ' + format.int(total) + ' / ' + format.int(state.records.length) + ' 条记录'
-          : '共 ' + format.int(state.totalRecords) + ' 条违规记录' +
-            (state.truncated ? '（仅加载最近 ' + format.int(state.records.length) + ' 条）' : ''))
-        : '暂无历史记录';
-    }
-
-    renderTagBar();
-    renderStatusChips();
-    renderSortButton();
-
-    if (!total) {
-      const filtered = Boolean(state.searchQuery || state.tagFilter || state.statusFilter);
-      fillList(host, 'empty',
-        filtered ? '没有匹配的记录' : '暂无审核记录',
-        filtered ? '换个关键词，或清空筛选条件再试。' : '当前还没有命中违规的图片记录。');
-      renderPager(0, 1, page);
+    const config = state.auditConfig || {};
+    if (!state.configLoaded && !config.rule_count && !config.provider_count) {
+      host.innerHTML = emptyState('empty', '正在读取配置', '进入配置中心或刷新后会显示当前策略。');
       return;
     }
+    const groupScope = (config.group_scope || []).map(String);
+    const privateScope = (config.private_scope || []).map(String);
+    const groupText = groupScope.indexOf('0') >= 0 ? '全部群聊' : (groupScope.length ? groupScope.length + ' 个群' : '未启用');
+    const privateText = privateScope.indexOf('0') >= 0 ? '全部私聊' : (privateScope.length ? privateScope.length + ' 个私聊' : '未启用');
+    const providerName = config.provider_names && config.provider_names.length ? config.provider_names[0] : 'AstrBot 当前 Provider';
+    const disposal = (config.enable_recall ? '撤回消息' : '不撤回') +
+      (Number(config.ban_duration) > 0 ? ' · 禁言 ' + format.duration(config.ban_duration) : ' · 不禁言');
+    const cost = (config.cache_enabled ? '缓存 ' + format.int(config.cache_threshold || 3) + ' 次' : '缓存关闭') +
+      ' · ' + (config.gate_enabled ? '门控 ' + format.percent(Number(config.gate_threshold || 0) * 100) : '门控关闭');
+    const rows = [
+      ['审查范围', groupText + ' · ' + privateText],
+      ['违规规则', format.int(config.rule_count || 0) + ' 条'],
+      ['优先模型', providerName],
+      ['自动处置', disposal],
+      ['成本控制', cost]
+    ];
+    host.innerHTML = rows.map(row =>
+      '<div class="policy-row"><span>' + esc(row[0]) + '</span><strong>' + esc(row[1]) + '</strong></div>'
+    ).join('');
+    const health = $('#policy-health');
+    if (health) {
+      const healthy = Number(config.provider_count) > 0;
+      health.innerHTML = '<i style="background:' + (healthy ? 'var(--green)' : 'var(--amber)') + '"></i>' +
+        (healthy ? '运行正常' : '未配置供应商') +
+        '<span>最近同步 ' + esc(state.lastSyncAt ? format.time(state.lastSyncAt) : '—') + '</span>';
+    }
+  }
 
-    host.innerHTML = slice.map(record => recordCard(record, false)).join('');
-    bindCards(host);
-    hydrateThumbs(host);
-    renderPager(total, totalPages, page);
+  function renderOverview() {
+    setText('nav-record-count', format.int(state.totalRecords || state.records.length));
+    renderHero();
+    renderSafe();
+    renderQueue();
+    renderDisposal();
+    renderSavings();
+    renderRecent();
+    renderPolicy();
+    const subtitle = $('#ov-subtitle');
+    if (subtitle) {
+      const count = state.records.length;
+      const total = state.totalRecords || count;
+      subtitle.textContent = count
+        ? dateLabel(new Date()) + ' · 共 ' + format.int(total) + ' 条违规记录 · 同步于 ' + (state.lastSyncAt ? format.time(state.lastSyncAt) : '刚刚')
+        : dateLabel(new Date()) + ' · 暂无违规记录 · 同步于 ' + (state.lastSyncAt ? format.time(state.lastSyncAt) : '刚刚');
+    }
+  }
+
+  /* ── 记录 ─────────────────────────────────────────────── */
+  function renderRecordsSummary() {
+    setText('nav-record-count', format.int(state.totalRecords || state.records.length));
+    const funnel = derive.auditFunnel();
+    const total = state.records.length;
+    const today = state.records.filter(record => isToday(record.time)).length;
+    const success = state.records.filter(record => derive.disposeStatus(record) === 'success').length;
+    const pending = derive.pendingItems();
+    setText('rec-kpi-total', format.int(today));
+    setText('rec-kpi-safe', format.int(funnel.safe || 0));
+    setText('rec-kpi-dispose', total ? Math.round(success / total * 100) + '%' : '—');
+    setText('rec-kpi-duration', funnel.msCount ? format.ms(funnel.msAvg) : '—');
+    setText('rec-kpi-pending', format.int(pending.length));
+    const totalNode = $('#rec-kpi-total');
+    if (totalNode) totalNode.classList.toggle('danger', today > 0);
+    const safeNode = $('#rec-kpi-safe');
+    if (safeNode) safeNode.classList.toggle('ok', (funnel.safe || 0) > 0);
+    const spark = $('#rec-spark');
+    if (spark) {
+      const series = derive.dailySeries(14);
+      const max = series.reduce((acc, item) => Math.max(acc, item.value), 0);
+      spark.innerHTML = series.map((item, index) => {
+        const height = item.value ? Math.max(14, Math.round(item.value / Math.max(max, 1) * 100)) : 8;
+        const cls = index === series.length - 1 ? ' class="is-peak"' : (item.value === max && max > 0 ? ' class="is-peak"' : '');
+        return '<i' + cls + ' style="height:' + height + '%"></i>';
+      }).join('');
+    }
+    setText('rec-tab-all-count', format.int(total));
+    setText('rec-tab-pending-count', format.int(pending.length));
+    setText('rec-tab-failed-count', format.int(state.records.filter(record => derive.disposeStatus(record) === 'failed').length));
+  }
+
+  function renderRecordRow(record) {
+    const selected = record.id === state.selectedRecordId;
+    const status = derive.disposeStatus(record);
+    const tags = (record.tags || []).slice(0, 2).map(tag => '<span class="tag">' + esc(tag) + '</span>').join('');
+    return '<button class="record-row' + (selected ? ' is-selected' : '') + '" type="button" data-record-id="' + esc(record.id || '') + '">' +
+      recordThumb(record) +
+      '<span class="record-row-body">' +
+      '<span class="record-row-title"><strong>' + esc(record.user_name || record.user_id || '未知用户') + '</strong>' +
+      '<span>' + esc(sourceLabel(record)) + ' · ' + esc(format.relative(record.time)) + '</span></span>' +
+      '<span class="record-row-reason">' + esc(record.reason || '未说明理由') + '</span>' +
+      (tags ? '<span class="record-row-tags">' + tags + '</span>' : '') +
+      '</span>' +
+      '<span class="record-row-side">' + statusBadge(status) +
+      '<time>' + esc(format.ms(record.audit_ms)) + '</time></span>' +
+      '</button>';
+  }
+
+  function renderPendingRow(item) {
+    const selected = item.id === state.selectedRecordId;
+    const who = item.user_name || item.user_id || '未知用户';
+    const source = item.group_id ? '群 ' + item.group_id : '私聊';
+    const preview = item.preview ? thumbMarkup(item.preview) : thumbMarkup('');
+    return '<button class="record-row' + (selected ? ' is-selected' : '') + '" type="button" data-pending-id="' + esc(item.id || '') + '">' +
+      preview +
+      '<span class="record-row-body"><span class="record-row-title"><strong>' + esc(who) + '</strong>' +
+      '<span>' + esc(source) + ' · 已用 ' + esc(format.elapsed(item.elapsed_seconds)) + '</span></span>' +
+      '<span class="record-row-reason">正在审核 ' + format.int(item.image_count || 1) + ' 张图片，完成后会写入记录</span>' +
+      '</span><span class="record-row-side"><span class="badge badge-live">审核中</span><time>进行中</time></span></button>';
   }
 
   function renderTagBar() {
     const bar = $('#tag-bar');
     const container = $('#tag-filter');
+    const toggle = $('#rec-tag-toggle');
     if (!bar || !container) return;
     const counts = derive.tagCounts();
-    if (!counts.length) {
+    const shouldShow = Boolean(state.tagBarOpen || state.tagFilter) && counts.length > 0;
+    if (!shouldShow) {
       bar.setAttribute('hidden', '');
       container.innerHTML = '';
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
       return;
     }
     bar.removeAttribute('hidden');
-    const chips = ['<button class="chip' + (state.tagFilter ? '' : ' is-active') + '" type="button" data-tag="">全部' +
-      '<span class="chip-count">' + format.int(state.records.length) + '</span></button>'];
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    const chips = ['<button class="chip' + (state.tagFilter ? '' : ' is-active') + '" type="button" data-tag="">全部<span class="chip-count">' + format.int(state.records.length) + '</span></button>'];
     counts.slice(0, 18).forEach(item => {
-      chips.push('<button class="chip' + (state.tagFilter === item[0] ? ' is-active' : '') + '" type="button" data-tag="' +
-        esc(item[0]) + '">' + esc(item[0]) + '<span class="chip-count">' + format.int(item[1]) + '</span></button>');
+      chips.push('<button class="chip' + (state.tagFilter === item[0] ? ' is-active' : '') + '" type="button" data-tag="' + esc(item[0]) + '">' + esc(item[0]) + '<span class="chip-count">' + format.int(item[1]) + '</span></button>');
     });
     container.innerHTML = chips.join('');
     $$('[data-tag]', container).forEach(button => {
@@ -535,200 +417,266 @@
     button.setAttribute('aria-pressed', state.sortDesc ? 'false' : 'true');
   }
 
+  function renderTabs() {
+    $$('#records-tabs .list-tab').forEach(button => {
+      button.classList.toggle('is-active', button.dataset.recTab === state.recordsTab);
+    });
+  }
+
   function renderPager(total, totalPages, page) {
     const pager = $('#pager');
     if (!pager) return;
-    const pageSize = state.pageSize;
-    const from = total ? (page - 1) * pageSize + 1 : 0;
-    const to = Math.min(total, page * pageSize);
-    pager.innerHTML =
-      '<span class="pager-info">' + (total
-        ? '第 ' + format.int(from) + '–' + format.int(to) + ' 条 / 共 ' + format.int(total) + ' 条'
-        : '暂无记录') + '</span>' +
+    if (!total) {
+      pager.innerHTML = '<span class="pager-info">暂无记录</span>';
+      return;
+    }
+    const from = (page - 1) * state.pageSize + 1;
+    const to = Math.min(total, page * state.pageSize);
+    pager.innerHTML = '<span class="pager-info">' + format.int(from) + '–' + format.int(to) + ' / ' + format.int(total) + '</span>' +
       '<div class="pager-actions">' +
-      '<button class="btn btn-sm btn-ghost" type="button" data-page="1"' + (page <= 1 ? ' disabled' : '') + '>首页</button>' +
-      '<button class="btn btn-sm btn-ghost" type="button" data-page="' + (page - 1) + '"' + (page <= 1 ? ' disabled' : '') + '>上一页</button>' +
+      '<button class="btn btn-sm btn-ghost" type="button" data-page="' + (page - 1) + '" aria-label="上一页"' + (page <= 1 ? ' disabled' : '') + '>‹</button>' +
       '<span class="pager-page">' + page + ' / ' + totalPages + '</span>' +
-      '<button class="btn btn-sm btn-ghost" type="button" data-page="' + (page + 1) + '"' + (page >= totalPages ? ' disabled' : '') + '>下一页</button>' +
-      '<button class="btn btn-sm btn-ghost" type="button" data-page="' + totalPages + '"' + (page >= totalPages ? ' disabled' : '') + '>末页</button>' +
+      '<button class="btn btn-sm btn-ghost" type="button" data-page="' + (page + 1) + '" aria-label="下一页"' + (page >= totalPages ? ' disabled' : '') + '>›</button>' +
       '</div>';
     $$('[data-page]', pager).forEach(button => {
       button.addEventListener('click', () => {
         state.route.page = Number(button.dataset.page) || 1;
         IG.app.syncRoute(true);
         renderRecords();
-        const main = $('#main');
-        if (main) main.scrollIntoView({ block: 'start', behavior: 'smooth' });
       });
     });
   }
 
-  /* ── 卡片交互 ─────────────────────────────────────────── */
-  function bindCards(host) {
-    $$('[data-preview]', host).forEach(button => {
-      button.addEventListener('click', event => {
-        event.stopPropagation();
-        IG.lightbox.open(button.dataset.preview, button.dataset.caption, button);
-      });
-    });
-    $$('[data-delete]', host).forEach(button => {
-      button.addEventListener('click', event => {
-        event.stopPropagation();
-        IG.app.deleteRecord(button.dataset.delete);
-      });
-    });
-    $$('[data-detail-btn]', host).forEach(button => {
-      button.addEventListener('click', event => {
-        event.stopPropagation();
-        openDrawer(button.dataset.detailBtn);
-      });
-    });
-    $$('.record[data-detail]', host).forEach(card => {
-      card.addEventListener('click', event => {
-        if (event.target.closest('button')) return;
-        openDrawer(card.dataset.detail);
-      });
-      card.addEventListener('keydown', event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        openDrawer(card.dataset.detail);
-      });
-    });
-  }
-
-  function markBroken(button) {
-    if (!button || !button.isConnected) return;
-    button.classList.add('thumb-broken');
-    button.replaceChildren();
-    const meta = button.parentElement && button.parentElement.querySelector('[data-size]');
-    if (meta) meta.textContent = '加载失败';
-  }
-
-  function hydrateThumbs(host) {
-    $$('.thumb', host).forEach(button => {
-      const url = button.dataset.preview;
-      if (!url) return;
-      IG.imageAsset.resolve(url).then(resolved => {
-        if (!resolved || !button.isConnected) return;
-        const img = document.createElement('img');
-        img.alt = '审核图片缩略图';
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.src = resolved;
-        img.addEventListener('error', () => markBroken(button), { once: true });
-        button.replaceChildren(img);
-      }).catch(() => markBroken(button));
-    });
-  }
-
-  /* ── 抽屉 ─────────────────────────────────────────────── */
-  let drawerRecordId = '';
-
-  function openDrawer(id) {
-    const record = state.records.filter(item => item.id === id)[0];
-    if (!record) return;
-    drawerRecordId = id;
-    const drawer = $('#record-drawer');
-    const body = $('#drawer-body');
-    const foot = $('#drawer-foot');
-    if (!drawer || !body || !foot) return;
-
-    $('#drawer-title').textContent = '记录详情';
-    $('#drawer-sub').textContent = format.fullTime(record.time) + ' · ' + format.relative(record.time);
-
-    const url = imageSource(record);
-    const status = derive.disposeStatus(record);
-    const tags = record.tags || [];
-
-    let media;
-    if (url) {
-      const sizeText = record.local_image_size ? format.bytes(record.local_image_size)
-        : (record.local_image_url ? '本地已保存' : '远程图片');
-      media = '<div class="detail-media">' +
-        '<div class="detail-media-empty" data-detail-image>正在加载图片…</div>' +
-        '<div class="detail-media-foot"><span>' + esc(sizeText) + '</span>' +
-        '<button class="link-btn" type="button" data-detail-open>查看大图</button></div></div>';
-    } else {
-      media = '<div class="detail-media"><div class="detail-media-empty">该记录没有关联图片</div></div>';
+  function renderDetail(record) {
+    const content = $('#detail-content');
+    const placeholder = $('#detail-empty');
+    if (!content || !placeholder) return;
+    if (!record) {
+      content.setAttribute('hidden', '');
+      content.innerHTML = '';
+      placeholder.removeAttribute('hidden');
+      placeholder.innerHTML = '<span class="detail-placeholder-mark">⌕</span><strong>选择一条记录查看详情</strong><p>图片、判定理由、处置结果与处理轨迹会显示在这里。</p>';
+      return;
     }
+    placeholder.setAttribute('hidden', '');
+    content.removeAttribute('hidden');
+    if (record.__pending) {
+      renderPendingDetail(record);
+      return;
+    }
+    const status = derive.disposeStatus(record);
+    const url = imageSource(record);
+    const tags = (record.tags || []).map(tag => '<span class="tag">' + esc(tag) + '</span>').join('');
+    const media = url
+      ? '<div class="detail-media" data-detail-media><div class="detail-media-empty">正在加载图片…</div><div class="detail-media-foot"><span>' + esc(record.local_image_size ? format.bytes(record.local_image_size) : (record.local_image_url ? '本地已保存' : '远程图片')) + '</span><button class="link-btn" type="button" data-detail-open>查看大图</button></div></div>'
+      : '<div class="detail-media"><div class="detail-media-empty">该记录没有关联图片</div></div>';
+    content.innerHTML =
+      '<div class="detail-head"><div><div class="detail-title"><h2>' + esc(record.user_name || record.user_id || '未知用户') + '</h2>' + statusBadge(status) + '</div>' +
+      '<div class="detail-meta">' + esc(format.fullTime(record.time)) + ' · ' + esc(format.relative(record.time)) + ' · ' + esc(sourceLabel(record)) + ' · 记录 ' + esc(record.id || '—') + '</div></div>' +
+      '<div class="detail-actions"><button class="btn btn-sm btn-ghost" type="button" data-detail-delete>删除</button></div></div>' +
+      media +
+      '<div class="detail-facts">' +
+      '<div class="detail-fact"><span>判定结果</span><strong class="danger">违规</strong></div>' +
+      '<div class="detail-fact"><span>处置</span><strong>' + (record.recalled ? '已撤回' : '未撤回') + ' · ' + (Number(record.ban_duration) > 0 ? (record.banned ? '已禁言' : '未禁言') : '不禁言') + '</strong></div>' +
+      '<div class="detail-fact"><span>禁言时长</span><strong>' + esc(format.duration(record.ban_duration)) + '</strong></div>' +
+      '<div class="detail-fact"><span>审核用时</span><strong>' + esc(Number(record.audit_ms) > 0 ? format.ms(record.audit_ms) : '未记录') + '</strong></div>' +
+      '<div class="detail-fact"><span>来源</span><strong>' + esc(sourceLabel(record)) + '</strong></div>' +
+      '</div>' +
+      '<div class="detail-reason"><span class="label">判定理由</span><p>' + esc(record.reason || '未说明理由') + '</p>' + (tags ? '<div class="tag-list">' + tags + '</div>' : '') + '</div>' +
+      renderDetailTimeline(record) +
+      '<div class="detail-foot"><span>记录 ID ' + esc(record.id || '—') + '</span><span>处理状态：' + esc(derive.disposeLabel(status)) + '</span></div>';
 
-    body.innerHTML = media +
-      '<div class="detail-block"><span class="detail-block-title">判定理由</span>' +
-      '<p class="detail-note">' + esc(record.reason || '未说明理由') + '</p>' +
-      (tags.length ? '<div class="tag-list">' + tags.map(tag =>
-        '<span class="tag">' + esc(tag) + '</span>').join('') + '</div>' : '') + '</div>' +
-      '<div class="detail-block"><span class="detail-block-title">记录信息</span>' +
-      '<dl class="kv">' +
-      '<dt>用户</dt><dd>' + esc(record.user_name || '未知') + '</dd>' +
-      '<dt>用户 ID</dt><dd>' + esc(record.user_id || '—') + '</dd>' +
-      '<dt>来源</dt><dd>' + esc(record.group_id ? '群 ' + record.group_id : '私聊') + '</dd>' +
-      '<dt>处置结果</dt><dd>' + esc(derive.disposeLabel(status)) + '</dd>' +
-      '<dt>禁言时长</dt><dd>' + esc(format.duration(record.ban_duration)) + '</dd>' +
-      '<dt>审核用时</dt><dd>' + esc(Number(record.audit_ms) > 0 ? format.ms(record.audit_ms) : '未记录') + '</dd>' +
-      '<dt>记录 ID</dt><dd>' + esc(record.id || '—') + '</dd>' +
-      '</dl></div>';
-
-    foot.innerHTML =
-      '<button class="btn btn-danger" type="button" data-detail-delete>删除记录</button>' +
-      '<button class="btn btn-primary" type="button" data-detail-close>关闭</button>';
+    const openBtn = $('[data-detail-open]', content);
+    if (openBtn) {
+      openBtn.addEventListener('click', () => IG.lightbox.open(url,
+        (record.user_name || record.user_id || '') + ' · ' + format.fullTime(record.time), openBtn));
+    }
+    const deleteBtn = $('[data-detail-delete]', content);
+    if (deleteBtn) deleteBtn.addEventListener('click', () => IG.app.deleteRecord(record.id));
 
     if (url) {
-      const holder = body.querySelector('[data-detail-image]');
+      const holder = $('[data-detail-media]', content);
       IG.imageAsset.resolve(url).then(resolved => {
         if (!resolved || !holder || !holder.isConnected) return;
         const img = document.createElement('img');
         img.alt = '审核图片';
-        img.addEventListener('error', () => { if (holder.isConnected) holder.textContent = '图片加载失败'; }, { once: true });
+        img.addEventListener('error', () => {
+          const empty = document.createElement('div');
+          empty.className = 'detail-media-empty';
+          empty.textContent = '图片加载失败';
+          holder.replaceChildren(empty);
+        }, { once: true });
         img.src = resolved;
-        const openBtn = body.querySelector('[data-detail-open]');
-        if (openBtn) {
-          openBtn.addEventListener('click', () => IG.lightbox.open(url,
-            (record.user_name || record.user_id || '') + ' · ' + format.fullTime(record.time), openBtn));
-        }
-        holder.replaceWith(img);
+        const placeholder = holder.querySelector('.detail-media-empty');
+        if (placeholder) placeholder.remove();
+        const foot = holder.querySelector('.detail-media-foot');
+        if (foot) holder.insertBefore(img, foot);
+        else holder.replaceChildren(img);
       }).catch(() => {
-        if (holder && holder.isConnected) holder.textContent = '图片加载失败';
+        if (holder && holder.isConnected) holder.querySelector('.detail-media-empty').textContent = '图片加载失败';
       });
     }
-
-    // 这两个按钮在 foot 里，不能在 body 内查找，否则为空导致打开抽屉直接抛错
-    const deleteBtn = foot.querySelector('[data-detail-delete]');
-    const footerCloseBtn = foot.querySelector('[data-detail-close]');
-    if (deleteBtn) deleteBtn.addEventListener('click', () => IG.app.deleteRecord(record.id));
-    if (footerCloseBtn) footerCloseBtn.addEventListener('click', closeDrawer);
-
-    IG.show($('#drawer-scrim'), true);
-    IG.show(drawer, true);
-    const headerCloseBtn = $('#drawer-close');
-    if (headerCloseBtn) headerCloseBtn.focus();
   }
 
-  function closeDrawer() {
-    drawerRecordId = '';
-    IG.show($('#drawer-scrim'), false);
-    IG.show($('#record-drawer'), false);
+  function renderDetailTimeline(record) {
+    const start = format.parseTime(record.time);
+    const auditMs = Number(record.audit_ms) || 0;
+    const judgeAt = start && auditMs ? new Date(start.getTime() + auditMs) : null;
+    const events = [
+      { time: start ? timeOnly(start) : '—', dot: 'blue', title: '收到消息', detail: sourceLabel(record) + ' · 1 张图片' },
+      { time: judgeAt ? timeOnly(judgeAt) : '—', dot: 'blue', title: '审核完成', detail: auditMs ? '用时 ' + format.ms(auditMs) : '未记录耗时' },
+      { time: judgeAt ? timeOnly(judgeAt) : '—', dot: 'green', title: '判定违规', detail: '命中规则，进入处置阶段' },
+      { time: '—', dot: record.recalled ? 'green' : 'red', title: '撤回消息', detail: record.recalled ? '成功' : '未成功' },
+      { time: '—', dot: Number(record.ban_duration) > 0 ? (record.banned ? 'green' : 'red') : 'amber', title: '禁言', detail: Number(record.ban_duration) > 0 ? (record.banned ? '成功 · ' + format.duration(record.ban_duration) : '未成功') : '未配置禁言' }
+    ];
+    return '<div class="detail-timeline"><h3>处理轨迹</h3><div class="detail-events">' + events.map(event =>
+      '<div class="detail-event"><time>' + esc(event.time) + '</time><span class="dot ' + event.dot + '"></span><div><strong>' + esc(event.title) + '</strong><span>' + esc(event.detail) + '</span></div></div>'
+    ).join('') + '</div></div>';
   }
 
-  function drawerOpen() {
-    const drawer = $('#record-drawer');
-    return Boolean(drawer && !drawer.hasAttribute('hidden'));
+  function renderPendingDetail(item) {
+    const content = $('#detail-content');
+    const who = item.user_name || item.user_id || '未知用户';
+    const source = item.group_id ? '群 ' + item.group_id : '私聊';
+    content.innerHTML =
+      '<div class="detail-head"><div><div class="detail-title"><h2>' + esc(who) + '</h2><span class="badge badge-live">审核中</span></div><div class="detail-meta">' + esc(source) + ' · 已用 ' + esc(format.elapsed(item.elapsed_seconds)) + ' · ' + format.int(item.image_count || 1) + ' 张图片</div></div></div>' +
+      '<div class="detail-media"><div class="detail-media-empty">' + (item.preview ? '正在加载预览…' : '审核完成后会保存图片') + '</div></div>' +
+      '<div class="detail-facts">' +
+      '<div class="detail-fact"><span>状态</span><strong class="danger">审核中</strong></div>' +
+      '<div class="detail-fact"><span>图片</span><strong>' + format.int(item.image_count || 1) + ' 张</strong></div>' +
+      '<div class="detail-fact"><span>已用时</span><strong>' + esc(format.elapsed(item.elapsed_seconds)) + '</strong></div>' +
+      '<div class="detail-fact"><span>来源</span><strong>' + esc(source) + '</strong></div>' +
+      '</div>' +
+      '<div class="detail-empty-note">审核完成后会自动写入记录；命中违规会立即执行撤回与禁言。</div>' +
+      '<div class="detail-foot"><span>任务 ' + esc(item.id || '—') + '</span><span>等待模型返回</span></div>';
+    if (item.preview) {
+      const holder = $('.detail-media', content);
+      IG.imageAsset.resolve(item.preview).then(resolved => {
+        if (!resolved || !holder || !holder.isConnected) return;
+        const img = document.createElement('img');
+        img.alt = '待审核图片';
+        img.src = resolved;
+        holder.replaceChildren(img);
+      }).catch(() => {
+        if (holder && holder.isConnected) holder.innerHTML = '<div class="detail-media-empty">预览加载失败</div>';
+      });
+    }
+  }
+
+  function renderRecords() {
+    const host = $('#records-list');
+    if (!host) return;
+    renderRecordsSummary();
+    renderTabs();
+    renderStatusChips();
+    renderSortButton();
+    const pendingTab = state.recordsTab === 'pending';
+    if (state.recordsTab === 'failed') state.statusFilter = 'failed';
+    const list = pendingTab ? [] : derive.filteredRecords();
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+    const page = Math.min(Math.max(1, state.route.page), totalPages);
+    state.route.page = page;
+
+    const summary = $('#rec-summary');
+    if (summary) {
+      summary.textContent = pendingTab
+        ? (derive.pendingItems().length ? '正在审核 ' + format.int(derive.pendingItems().length) + ' 个任务' : '当前没有正在审核的任务')
+        : (state.records.length
+          ? (total !== state.records.length
+            ? '筛选出 ' + format.int(total) + ' / ' + format.int(state.records.length) + ' 条记录'
+            : '共 ' + format.int(state.totalRecords || state.records.length) + ' 条违规记录' + (state.truncated ? ' · 仅加载最近 ' + format.int(state.records.length) + ' 条' : ''))
+          : '暂无历史记录');
+    }
+
+    renderTagBar();
+    if (pendingTab) {
+      const items = derive.pendingItems();
+      host.innerHTML = items.length ? items.map(renderPendingRow).join('') : emptyState('empty', '当前没有正在审核的任务', '新的图片进入审核后会出现在这里。');
+      renderPager(0, 1, 1);
+      const selected = items.filter(item => item.id === state.selectedRecordId)[0] || items[0];
+      state.selectedRecordId = selected ? selected.id : '';
+      renderDetail(selected ? Object.assign({ __pending: true }, selected) : null);
+      hydrateThumbs(host);
+      bindRecordRows(host, items, true);
+      return;
+    }
+    if (!total) {
+      const filtered = Boolean(state.searchQuery || state.tagFilter || state.statusFilter);
+      host.innerHTML = emptyState('empty', filtered ? '没有匹配的记录' : '暂无审核记录', filtered ? '换个关键词，或清空筛选条件再试。' : '当前还没有命中违规的图片记录。');
+      renderPager(0, 1, page);
+      state.selectedRecordId = '';
+      renderDetail(null);
+      return;
+    }
+    const slice = list.slice((page - 1) * state.pageSize, page * state.pageSize);
+    let selected = slice.filter(record => record.id === state.selectedRecordId)[0];
+    if (!selected) selected = slice[0] || list[0];
+    state.selectedRecordId = selected ? selected.id : '';
+    host.innerHTML = slice.map(record => renderRecordRow(record)).join('');
+    renderPager(total, totalPages, page);
+    renderDetail(selected);
+    hydrateThumbs(host);
+    bindRecordRows(host, slice, false);
+    $$('#status-filter .chip').forEach(button => {
+      button.classList.toggle('is-active', (button.dataset.status || '') === state.statusFilter);
+    });
+  }
+
+  function bindRecordRows(host, items, pending) {
+    $$('.record-row', host).forEach(row => {
+      row.addEventListener('click', () => {
+        const id = pending ? row.dataset.pendingId : row.dataset.recordId;
+        if (!id) return;
+        state.selectedRecordId = id;
+        $$('.record-row', host).forEach(other => other.classList.toggle('is-selected', other === row));
+        if (pending) {
+          const item = items.filter(entry => entry.id === id)[0];
+          renderDetail(item ? Object.assign({ __pending: true }, item) : null);
+        } else {
+          const record = state.records.filter(entry => entry.id === id)[0];
+          renderDetail(record || null);
+        }
+      });
+    });
+  }
+
+  function renderPending() {
+    renderQueue();
+    const pending = derive.pendingItems();
+    setText('rec-tab-pending-count', format.int(pending.length));
+    setText('rec-kpi-pending', format.int(pending.length));
+    if (state.route.view === 'records' && state.recordsTab === 'pending') renderRecords();
+  }
+
+  function setDataState(kind, message) {
+    const subtitle = $('#ov-subtitle');
+    if (subtitle) subtitle.textContent = kind === 'error' ? '审核数据加载失败：' + message : '正在同步审核数据…';
+    const recent = $('#recent-list');
+    if (recent) recent.innerHTML = emptyState(kind, kind === 'error' ? '审核数据加载失败' : '正在读取审核记录', message || '正在同步审核历史、供应商统计与本地图片。');
+    const queue = $('#queue-list');
+    if (queue) queue.innerHTML = kind === 'error'
+      ? emptyState('error', '队列不可用', message)
+      : '<div class="queue-empty"><strong>正在同步实时队列…</strong></div>';
+    const records = $('#records-list');
+    if (records) records.innerHTML = emptyState(kind, kind === 'error' ? '审核数据加载失败' : '正在读取审核记录', message || '正在同步审核历史、供应商统计与本地图片。');
+    const detailEmpty = $('#detail-empty');
+    const detailContent = $('#detail-content');
+    if (detailContent) detailContent.setAttribute('hidden', '');
+    if (detailEmpty) {
+      detailEmpty.removeAttribute('hidden');
+      detailEmpty.innerHTML = '<span class="detail-placeholder-mark">' + (kind === 'error' ? '!' : '···') + '</span><strong>' + (kind === 'error' ? '审核数据加载失败' : '正在同步记录') + '</strong><p>' + esc(message || '请稍候…') + '</p>';
+    }
   }
 
   IG.views = {
     renderOverview: renderOverview,
     renderRecords: renderRecords,
-    renderStats: renderStats,
+    renderStats: renderRecordsSummary,
     renderPending: renderPending,
     renderTrend: renderTrend,
-    renderTrendRange: renderTrendRange,
-    renderSnapshot: renderSnapshot,
-    renderSideHealth: renderSideHealth,
-    renderScopeSummary: renderScopeSummary,
-    fillList: fillList,
-    openDrawer: openDrawer,
-    closeDrawer: closeDrawer,
-    drawerOpen: drawerOpen,
-    currentDrawerId() { return drawerRecordId; },
+    setDataState: setDataState,
+    renderPolicy: renderPolicy,
     hydrateThumbs: hydrateThumbs
   };
 })();

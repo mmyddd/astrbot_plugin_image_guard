@@ -650,7 +650,7 @@ class ImageGuard(Star):
             logger.debug(f"[ImageGuard] 用户 {user_id} 在审核白名单内，跳过")
             return
 
-        group_scope = [str(x) for x in self.config.get("group_scope", ["0"])]
+        group_scope = [str(x) for x in self.config.get("group_scope", [])]
         private_scope = [str(x) for x in self.config.get("private_scope", [])]
 
         if is_group:
@@ -1477,7 +1477,7 @@ class ImageGuard(Star):
         """页面头部用的配置摘要，不含任何敏感字段。"""
         providers = _sanitize_providers(self.config.get("llm_providers", []))
         return {
-            "group_scope": _as_text_list(self.config.get("group_scope", ["0"])) or ["0"],
+            "group_scope": _as_text_list(self.config.get("group_scope", [])),
             "private_scope": _as_text_list(self.config.get("private_scope", [])),
             "whitelist_count": len(_as_text_list(self.config.get("audit_whitelist", []))),
             "rule_count": len(_as_text_list(self.config.get("sensitive_texts", [])))
@@ -1488,6 +1488,7 @@ class ImageGuard(Star):
             "enable_recall": _as_bool(self.config.get("enable_recall", True)),
             "ban_duration": _as_int(self.config.get("ban_duration", 86400), 86400),
             "cache_enabled": _as_bool(self.config.get("audit_cache_enabled", True)),
+            "cache_threshold": _as_int(self.config.get("audit_cache_threshold", 3), 3),
             "gate_enabled": _as_bool(self.config.get("systemone_enabled", False)),
             "gate_threshold": _as_float(
                 self.config.get("systemone_violation_threshold", 0.3), 0.3
