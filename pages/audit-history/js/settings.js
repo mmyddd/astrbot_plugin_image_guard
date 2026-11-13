@@ -87,7 +87,11 @@
   let reportTargets = [];
   let fillingForm = false;
   const SCOPE_IDS = { group: 'cfg-group_scope', private: 'cfg-private_scope', whitelist: 'cfg-audit_whitelist' };
-  const SCOPE_LABELS = { group: '群号', private: 'QQ 号', whitelist: '用户 QQ 号' };
+  const SCOPE_LABELS = { group: '群号或群 OpenID', private: 'QQ 号或用户 OpenID', whitelist: '用户 QQ 号或 OpenID' };
+  // OneBot 平台是纯数字 QQ 号；QQ 官方机器人平台（qq_official / qq_official_webhook）
+  // 的群与用户标识是大小写混合的 OpenID（如 CBE7A2C84E21C9403405C3EF244DE994），
+  // 所以这里不能只放行纯数字，否则官方机器人用户根本加不进作用域。
+  const SCOPE_VALUE_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const scopeStash = { group: [], private: [] };
   const wizard = {
     step: 0,
@@ -215,12 +219,12 @@
     }
     const rows = reportTargets.map((item, index) =>
       '<div class="mapper-row" data-mapper="' + index + '">' +
-      '<input class="input" type="text" inputmode="numeric" data-map-field="source_group_id" placeholder="来源群号" value="' + esc(item.source_group_id || '') + '">' +
+      '<input class="input" type="text" data-map-field="source_group_id" placeholder="来源群号 / 群 OpenID" value="' + esc(item.source_group_id || '') + '">' +
       '<select class="select" data-map-field="target_type">' +
       '<option value="private"' + (item.target_type === 'group' ? '' : ' selected') + '>私聊</option>' +
       '<option value="group"' + (item.target_type === 'group' ? ' selected' : '') + '>群聊</option>' +
       '</select>' +
-      '<input class="input" type="text" inputmode="numeric" data-map-field="target_id" placeholder="接收目标 ID" value="' + esc(item.target_id || '') + '">' +
+      '<input class="input" type="text" data-map-field="target_id" placeholder="接收目标 QQ 号 / OpenID" value="' + esc(item.target_id || '') + '">' +
       '<button class="icon-btn" type="button" data-map-remove="' + index + '" aria-label="删除该映射">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>' +
       '</button></div>'
@@ -1173,8 +1177,8 @@
       note.dataset.tone = '';
     } else {
       note.textContent = kind === 'group'
-        ? '未添加群号时不会审查任何群聊。'
-        : '未添加 QQ 号时不会审查任何私聊。';
+        ? '未添加群号时不会审查任何群聊。QQ 官方机器人的群 ID 是 OpenID（如 CBE7A2C8…），直接用 /sid 查到的群 ID 填即可。'
+        : '未添加 QQ 号时不会审查任何私聊。QQ 官方机器人的用户 ID 是 OpenID，同样直接填。';
       note.dataset.tone = 'warn';
     }
   }
@@ -1195,7 +1199,9 @@
       input.disabled = all;
       input.placeholder = all
         ? '当前为全部，切换到指定后可添加'
-        : kind === 'group' ? '输入群号，点击添加' : '输入 QQ 号，点击添加';
+        : kind === 'group'
+          ? '输入群号或群 OpenID，点击添加'
+          : kind === 'private' ? '输入 QQ 号或用户 OpenID，点击添加' : '输入用户 QQ 号或 OpenID，点击添加';
     }
     if (button) button.disabled = all;
     renderScopeTokens(kind);
@@ -1213,8 +1219,8 @@
   function addScopeValue(kind, rawValue) {
     const value = String(rawValue || '').trim();
     if (!value) return;
-    if (!/^\d{1,15}$/.test(value)) {
-      toast('请输入数字形式的' + SCOPE_LABELS[kind], 'error');
+    if (!SCOPE_VALUE_RE.test(value)) {
+      toast('请输入合法的' + SCOPE_LABELS[kind] + '（仅限字母、数字、下划线和短横线）', 'error');
       return;
     }
     if (kind !== 'whitelist' && scopeAll(kind)) {
@@ -1352,7 +1358,7 @@
       input.disabled = all;
       input.placeholder = all
         ? '当前为全部，切换到指定后可添加'
-        : kind === 'group' ? '输入群号，点击添加' : '输入 QQ 号，点击添加';
+        : kind === 'group' ? '输入群号或群 OpenID，点击添加' : '输入 QQ 号或用户 OpenID，点击添加';
     }
     if (add) add.disabled = all;
     const note = root.querySelector('[data-wizard-scope-note]');
@@ -1369,8 +1375,8 @@
         note.dataset.tone = '';
       } else {
         note.textContent = kind === 'group'
-          ? '未添加群号时不会审查任何群聊。'
-          : '未添加 QQ 号时不会审查任何私聊。';
+          ? '未添加群号时不会审查任何群聊。官方机器人的群 ID 是 OpenID，可直接填入。'
+          : '未添加 QQ 号时不会审查任何私聊。官方机器人的用户 ID 是 OpenID，可直接填入。';
         note.dataset.tone = 'warn';
       }
     }
@@ -1384,8 +1390,8 @@
   function addWizardScope(kind, rawValue) {
     const value = String(rawValue || '').trim();
     if (!value) return;
-    if (!/^\d{1,15}$/.test(value)) {
-      toast('请输入数字形式的' + SCOPE_LABELS[kind], 'error');
+    if (!SCOPE_VALUE_RE.test(value)) {
+      toast('请输入合法的' + SCOPE_LABELS[kind] + '（仅限字母、数字、下划线和短横线）', 'error');
       return;
     }
     if (wizard[kind + 'Mode'] === 'all') wizard[kind + 'Mode'] = 'specified';

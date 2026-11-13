@@ -1,6 +1,6 @@
 {
   "group_scope": {
-    "description": "启用审查的群号列表。默认不启用；请添加需要审查的群号。若包含 \"0\" 则监听所有群。",
+    "description": "启用审查的群列表。OneBot 填群号，QQ 官方机器人填群 OpenID（如 CBE7A2C84E21C9403405C3EF244DE994）。默认不启用；若包含 \"0\" 则监听所有群。",
     "type": "list",
     "default": [],
     "items": {
@@ -8,7 +8,7 @@
     }
   },
   "private_scope": {
-    "description": "启用审查的私聊用户(QQ)列表。若包含 \"0\" 则监听所有私聊。若留空则不启用。",
+    "description": "启用审查的私聊用户列表。OneBot 填 QQ 号，QQ 官方机器人填用户 OpenID。若包含 \"0\" 则监听所有私聊。若留空则不启用。",
     "type": "list",
     "default": [],
     "items": {
@@ -16,13 +16,13 @@
     }
   },
   "audit_whitelist": {
-    "description": "审核白名单：名单内用户发送的图片既不审核也不记录，直接放行。群聊与私聊均生效（按发送者 QQ 判断）。",
+    "description": "审核白名单：名单内用户发送的图片既不审核也不记录，直接放行。群聊与私聊均生效（按发送者 ID 判断，OneBot 为 QQ 号，官方机器人为 OpenID）。",
     "type": "list",
     "default": [],
     "items": {
       "type": "string"
     },
-    "hint": "填写用户 QQ 号，每行一个；留空表示不使用白名单"
+    "hint": "填写用户 QQ 号或 OpenID，每行一个；留空表示不使用白名单"
   },
   "skip_audit_for_banned": {
     "description": "是否跳过被黑名单插件禁用的用户。默认关闭：即使该用户已被 dahetaoa/AstrBot-ban-Plugins 禁用，本插件仍会审核其图片——审核是静默的群组保护动作，不会回复用户，因此不违背「禁用 bot」的本意，同时避免被禁用户借机发送违规图片。开启后本插件将与黑名单插件行为完全一致。",

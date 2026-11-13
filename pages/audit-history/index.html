@@ -348,7 +348,7 @@
               <div class="scope-grid">
                 <div class="scope-field" data-scope="group">
                   <div class="scope-field-head">
-                    <div><strong>群聊</strong><span>只审查你添加的群号</span></div>
+                    <div><strong>群聊</strong><span>只审查你添加的群号 / 群 OpenID</span></div>
                     <div class="scope-mode" role="group" aria-label="群聊范围">
                       <button type="button" data-scope-mode="specified" class="is-active">指定群号</button>
                       <button type="button" data-scope-mode="all">全部群聊</button>
@@ -357,7 +357,7 @@
                   <div class="scope-editor" data-scope-editor="group">
                     <div class="token-list" data-scope-tokens="group"></div>
                     <div class="token-add">
-                      <input class="input" type="text" inputmode="numeric" data-scope-input="group" placeholder="输入群号，点击添加" autocomplete="off">
+                      <input class="input" type="text" data-scope-input="group" placeholder="输入群号或群 OpenID，点击添加" autocomplete="off">
                       <button class="btn btn-sm btn-tonal" type="button" data-scope-add="group">添加</button>
                     </div>
                     <p class="field-hint" data-scope-note="group"></p>
@@ -366,7 +366,7 @@
                 </div>
                 <div class="scope-field" data-scope="private">
                   <div class="scope-field-head">
-                    <div><strong>私聊</strong><span>只审查你添加的 QQ 号</span></div>
+                    <div><strong>私聊</strong><span>只审查你添加的 QQ 号 / 用户 OpenID</span></div>
                     <div class="scope-mode" role="group" aria-label="私聊范围">
                       <button type="button" data-scope-mode="specified" class="is-active">指定用户</button>
                       <button type="button" data-scope-mode="all">全部私聊</button>
@@ -375,7 +375,7 @@
                   <div class="scope-editor" data-scope-editor="private">
                     <div class="token-list" data-scope-tokens="private"></div>
                     <div class="token-add">
-                      <input class="input" type="text" inputmode="numeric" data-scope-input="private" placeholder="输入 QQ 号，点击添加" autocomplete="off">
+                      <input class="input" type="text" data-scope-input="private" placeholder="输入 QQ 号或用户 OpenID，点击添加" autocomplete="off">
                       <button class="btn btn-sm btn-tonal" type="button" data-scope-add="private">添加</button>
                     </div>
                     <p class="field-hint" data-scope-note="private"></p>
@@ -391,7 +391,7 @@
                 <div class="scope-editor" data-scope-editor="whitelist">
                   <div class="token-list" data-scope-tokens="whitelist"></div>
                   <div class="token-add">
-                    <input class="input" type="text" inputmode="numeric" data-scope-input="whitelist" placeholder="输入用户 QQ 号，点击添加" autocomplete="off">
+                    <input class="input" type="text" data-scope-input="whitelist" placeholder="输入用户 QQ 号或 OpenID，点击添加" autocomplete="off">
                     <button class="btn btn-sm btn-tonal" type="button" data-scope-add="whitelist">添加</button>
                   </div>
                   <p class="field-hint" data-scope-note="whitelist"></p>
@@ -445,9 +445,9 @@
                 <div class="field">
                   <div class="field-head">
                     <label class="field-label" for="cfg-report_target_id">战报接收人</label>
-                    <span class="field-hint">管理员 QQ 号，留空表示不转发</span>
+                    <span class="field-hint">管理员 QQ 号或用户 OpenID，留空表示不转发</span>
                   </div>
-                  <input class="input" type="text" id="cfg-report_target_id" inputmode="numeric" placeholder="例如 123456789">
+                  <input class="input" type="text" id="cfg-report_target_id" placeholder="例如 123456789 或 CBE7A2C84E21C9403405C3EF244DE994">
                 </div>
               </div>
               <div class="field field-block">
@@ -800,7 +800,7 @@
             <div class="wizard-body">
               <div class="wizard-step-panel" data-wizard-panel="0">
                 <section class="wizard-group">
-                  <div class="wizard-group-head"><h3>群聊</h3><p>默认只审查你添加的群号。</p></div>
+                  <div class="wizard-group-head"><h3>群聊</h3><p>默认只审查你添加的群号；QQ 官方机器人填群 OpenID。</p></div>
 
 <div class="scope-field" data-wizard-scope="group">
   <div class="scope-mode" role="group" aria-label="群聊范围">
@@ -810,7 +810,7 @@
   <div class="scope-editor">
     <div class="token-list" data-wizard-scope-tokens="group"></div>
     <div class="token-add">
-      <input class="input" type="text" inputmode="numeric" data-wizard-scope-input="group" placeholder="输入群号，点击添加" autocomplete="off">
+      <input class="input" type="text" data-wizard-scope-input="group" placeholder="输入群号或群 OpenID，点击添加" autocomplete="off">
       <button class="btn btn-sm btn-tonal" type="button" data-wizard-scope-add="group">添加</button>
     </div>
     <p class="field-hint" data-wizard-scope-note="group"></p>
@@ -818,7 +818,7 @@
 </div>
                 </section>
                 <section class="wizard-group">
-                  <div class="wizard-group-head"><h3>私聊</h3><p>默认只审查你添加的 QQ 号。</p></div>
+                  <div class="wizard-group-head"><h3>私聊</h3><p>默认只审查你添加的 QQ 号；QQ 官方机器人填用户 OpenID。</p></div>
 
 <div class="scope-field" data-wizard-scope="private">
   <div class="scope-mode" role="group" aria-label="私聊范围">
@@ -828,7 +828,7 @@
   <div class="scope-editor">
     <div class="token-list" data-wizard-scope-tokens="private"></div>
     <div class="token-add">
-      <input class="input" type="text" inputmode="numeric" data-wizard-scope-input="private" placeholder="输入 QQ 号，点击添加" autocomplete="off">
+      <input class="input" type="text" data-wizard-scope-input="private" placeholder="输入 QQ 号或用户 OpenID，点击添加" autocomplete="off">
       <button class="btn btn-sm btn-tonal" type="button" data-wizard-scope-add="private">添加</button>
     </div>
     <p class="field-hint" data-wizard-scope-note="private"></p>
@@ -864,7 +864,7 @@
                   </label>
                   <div class="inline-grid wizard-grid">
                     <div class="field"><div class="field-head"><label class="field-label" for="wizard-ban-duration">禁言时长（秒）</label><span class="field-hint">填 0 表示不禁言</span></div><input class="input" type="number" id="wizard-ban-duration" min="0" max="2592000" step="60" inputmode="numeric"></div>
-                    <div class="field"><div class="field-head"><label class="field-label" for="wizard-report-target">战报接收人</label><span class="field-hint">留空表示不转发</span></div><input class="input" type="text" id="wizard-report-target" inputmode="numeric" placeholder="例如 123456789"></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="wizard-report-target">战报接收人</label><span class="field-hint">留空表示不转发</span></div><input class="input" type="text" id="wizard-report-target" placeholder="QQ 号或 OpenID，例如 123456789"></div>
                   </div>
                 </section>
                 <section class="wizard-group">
