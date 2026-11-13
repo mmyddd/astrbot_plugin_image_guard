@@ -766,6 +766,7 @@
       state.fullConfig = config || {};
       state.configLoaded = true;
       fillForm(state.fullConfig);
+      renderGroupPicker();
       IG.state.auditConfig = Object.assign({}, state.auditConfig, {
         rule_count: (state.fullConfig.sensitive_texts || []).length + (state.fullConfig.forbidden_descriptions || []).length,
         provider_count: (state.fullConfig.llm_providers || []).length,
@@ -779,6 +780,7 @@
       });
       IG.views.renderPolicy();
       renderSettingsNavMeta();
+      await refreshGroupNames();
       await refreshStorage();
       await loadDataset();
       updateDirtyUi();
@@ -1137,6 +1139,13 @@
     if (ta) ta.value = values.join('\n');
   }
 
+  // 把群 ID 换成「群名 (ID)」；没有名字时原样返回 ID，不影响已有配置
+  function groupDisplay(value) {
+    const names = (state && state.groupNames) || {};
+    const name = names[value];
+    return name ? name + ' (' + value + ')' : value;
+  }
+
   function renderScopeTokens(kind) {
     const root = scopeRoot(kind);
     if (!root) return;
@@ -1148,8 +1157,10 @@
       host.innerHTML = '<span class="token-empty">当前审查全部</span>';
       return;
     }
+    // 群聊作用域显示群名，聊天时由插件把群名记进缓存，一眼就能核对是不是这个群
+    const labelOf = value => kind === 'group' ? groupDisplay(value) : value;
     host.innerHTML = values.length
-      ? values.map(value => '<span class="token">' + esc(value) +
+      ? values.map(value => '<span class="token" title="' + esc(value) + '">' + esc(labelOf(value)) +
         ' <button type="button" data-scope-remove="' + esc(value) + '" aria-label="移除 ' + esc(value) + '">×</button></span>').join('')
       : '<span class="token-empty">尚未添加</span>';
   }
@@ -1208,6 +1219,7 @@
     if (button) button.disabled = all;
     renderScopeTokens(kind);
     updateScopeNote(kind);
+    if (kind === 'group') renderGroupPicker();
   }
 
   function syncScopeEditorsFromInputs() {
@@ -1269,6 +1281,35 @@
     markDirty();
   }
 
+  // 群名来自 AstrBot 的会话别名表，配置页刷新时拉一次即可
+  async function refreshGroupNames() {
+    try {
+      const result = await IG.api.groupNames();
+      state.groupNames = (result && result.names) || state.groupNames || {};
+    } catch (error) {
+      // 旧版框架没有这个接口时保持已有缓存，不影响页面其他部分
+    }
+    renderScopeTokens('group');
+    renderGroupPicker();
+  }
+
+  // 把 AstrBot 已经见过的群（含高级路由里的群名）填进下拉框，避免手抄 OpenID
+  function renderGroupPicker() {
+    const select = $('#scope-group-picker');
+    if (!select) return;
+    const names = state.groupNames || {};
+    const values = scopeValues('group');
+    const options = Object.keys(names)
+      .filter(id => id && id !== '0')
+      .sort((a, b) => String(names[a]).localeCompare(String(names[b]), 'zh-Hans-CN'))
+      .map(id => '<option value="' + esc(id) + '">' + esc(names[id] + ' (' + id + ')') + '</option>');
+    const kept = select.value;
+    select.innerHTML = '<option value="">从已知群选择…</option>' + options.join('');
+    select.value = values.indexOf(kept) >= 0 ? '' : kept;
+    select.disabled = scopeAll('group') || !options.length;
+    select.title = options.length ? '从 AstrBot 记录过的群中选择' : '还没有记录到任何群，先在群里发一条消息';
+  }
+
   function initScopeEditors() {
     ['group', 'private', 'whitelist'].forEach(kind => {
       const root = scopeRoot(kind);
@@ -1297,6 +1338,14 @@
         });
       }
     });
+    const picker = $('#scope-group-picker');
+    if (picker) {
+      picker.addEventListener('change', () => {
+        const value = picker.value;
+        picker.value = '';
+        if (value) addScopeValue('group', value);
+      });
+    }
   }
 
   function renderSettingsNavMeta() {

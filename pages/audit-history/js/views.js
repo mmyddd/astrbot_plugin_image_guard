@@ -36,8 +36,15 @@
     return '<span class="badge ' + cls + '">' + esc(derive.disposeLabel(status)) + '</span>';
   }
 
+  function groupLabel(groupId) {
+    if (!groupId) return '私聊';
+    const names = state.groupNames || {};
+    const name = names[groupId];
+    return name ? '群 ' + name : '群 ' + groupId;
+  }
+
   function sourceLabel(record) {
-    return record.group_id ? '群 ' + record.group_id : '私聊';
+    return groupLabel(record.group_id);
   }
 
   function dateLabel(date) {
@@ -174,7 +181,7 @@
     }
     host.innerHTML = items.slice(0, 3).map(item => {
       const who = item.user_name || item.user_id || '未知用户';
-      const source = item.group_id ? '群 ' + item.group_id : '私聊';
+      const source = groupLabel(item.group_id);
       const preview = item.preview ? thumbMarkup(item.preview) : thumbMarkup('');
       return '<div class="queue-item">' +
         preview +
@@ -364,7 +371,7 @@
   function renderPendingRow(item) {
     const selected = item.id === state.selectedRecordId;
     const who = item.user_name || item.user_id || '未知用户';
-    const source = item.group_id ? '群 ' + item.group_id : '私聊';
+    const source = groupLabel(item.group_id);
     const preview = item.preview ? thumbMarkup(item.preview) : thumbMarkup('');
     return '<button class="record-row' + (selected ? ' is-selected' : '') + '" type="button" data-pending-id="' + esc(item.id || '') + '">' +
       preview +
@@ -537,7 +544,7 @@
   function renderPendingDetail(item) {
     const content = $('#detail-content');
     const who = item.user_name || item.user_id || '未知用户';
-    const source = item.group_id ? '群 ' + item.group_id : '私聊';
+    const source = groupLabel(item.group_id);
     content.innerHTML =
       '<div class="detail-head"><div><div class="detail-title"><h2>' + esc(who) + '</h2><span class="badge badge-live">审核中</span></div><div class="detail-meta">' + esc(source) + ' · 已用 ' + esc(format.elapsed(item.elapsed_seconds)) + ' · ' + format.int(item.image_count || 1) + ' 张图片</div></div></div>' +
       '<div class="detail-media"><div class="detail-media-empty">' + (item.preview ? '正在加载预览…' : '审核完成后会保存图片') + '</div></div>' +

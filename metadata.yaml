@@ -1,7 +1,7 @@
 name: astrbot_plugin_image_guard
-version: 1.14.0
+version: 1.15.0
 display_name: 图片内容审查卫士
-desc: 基于多模态 LLM 的图片内容审查卫士。v1.14.0 支持 QQ 官方机器人（qq_official / qq_official_webhook）：撤回、禁言、战报改走官方 API v2，不再只能跑 OneBot 11。
+desc: 基于多模态 LLM 的图片内容审查卫士。v1.15.0 复用 AstrBot 的会话别名，把群 ID 显示成群名，并支持从已知群直接选择；v1.14.0 起支持 QQ 官方机器人（撤回、禁言、战报走 API v2）。
 author: mmyddd
 repo: https://github.com/mmyddd/astrbot_plugin_image_guard
 # Python 依赖：pillow (PIL)、httpx

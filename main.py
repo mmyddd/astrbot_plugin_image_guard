@@ -21,6 +21,13 @@ from .image_processor import (
 )
 from .dataset_recorder import EXPORT_FORMATS, DatasetRecorder
 from . import qq_official_actions as official_api
+from .group_names import (
+    group_id_from_umo,
+    group_name_from_event,
+    load_alias_names,
+    merge_group_names,
+    normalize_group_name,
+)
 from .qq_official_actions import (
     OFFICIAL_MUTE_MAX_SECONDS,
     OFFICIAL_RECALL_WINDOW_SECONDS,
@@ -371,7 +378,7 @@ def _make_probe_image() -> bytes:
     return buffer.getvalue()
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.14.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.15.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -393,6 +400,10 @@ class ImageGuard(Star):
         # ── 处理中的审核任务（仅内存，不持久化；命中违规才写入历史）──
         self._pending_audits: dict[str, dict] = {}
         self._pending_seq = 0
+
+        # ── 群名缓存（群 ID -> 群名，来自入站消息与 AstrBot 的别名表）──
+        self._group_names: dict[str, str] = {}
+        self._group_names_loaded = False
 
         # ── 审核历史 API ──
         context.register_web_api(
@@ -460,6 +471,12 @@ class ImageGuard(Star):
             self._api_audit_storage_prune,
             ["POST", "DELETE"],
             "清理没有对应记录的本地图片",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_image_guard/audit/group-names",
+            self._api_audit_group_names,
+            ["GET"],
+            "获取群 ID 对应的群名",
         )
         context.register_web_api(
             "/astrbot_plugin_image_guard/audit/dataset",
@@ -615,6 +632,41 @@ class ImageGuard(Star):
             "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+    # ── 群名解析 ───────────────────────────────────────────────
+
+    async def _remember_group_name(self, event: AstrMessageEvent, group_id: str) -> None:
+        """把本次消息里的群名记进内存缓存。
+
+        每次消息都会走这里，所以只做一次轻量的字典比较；名字没变就直接返回，
+        真正拉群信息（QQ 官方机器人要打一次 /info 接口）只在缓存缺失时发生。
+        """
+        gid = str(group_id or "").strip()
+        if not gid or self._group_names.get(gid):
+            return
+        try:
+            name = await group_name_from_event(event)
+        except Exception as exc:
+            logger.debug(f"[ImageGuard] 解析群 {gid} 的名称失败: {exc}")
+            return
+        if name:
+            self._group_names[gid] = name
+
+    async def _group_name_map(self) -> dict[str, str]:
+        """合并三个来源的群名：AstrBot 别名表 > 插件缓存。
+
+        别名表里既有用户用 /name 起的别名，也有框架自动记下的群名，权重最高；
+        插件缓存兜住「框架还没记录、但本插件见过这个群」的情况。
+        """
+        alias_names: dict[str, str] = {}
+        try:
+            alias_names = await load_alias_names(self.context)
+        except Exception as exc:
+            logger.debug(f"[ImageGuard] 读取会话别名失败: {exc}")
+        merged = merge_group_names(alias_names, self._group_names)
+        # 把合并结果写回缓存，页面下次读取时不必重复访问数据库
+        self._group_names.update(merged)
+        return merged
+
     # ── 审核缓存持久化 ─────────────────────────────────────────
 
     async def _ensure_audit_cache_loaded(self) -> None:
@@ -651,6 +703,10 @@ class ImageGuard(Star):
         if self.config.get("skip_audit_for_banned", False) and _hit_ban_plugin(user_id, group_id):
             logger.debug(f"[ImageGuard] 用户 {user_id} 已被黑名单插件禁用，按配置跳过审核")
             return
+
+        # === 1.15 记录群名，供配置页把 ID 显示成群名 ===
+        if is_group:
+            await self._remember_group_name(event, group_id)
 
         # === 1.2 审核白名单：名单内用户直接放行，既不审核也不记录 ===
         if _hit_whitelist(user_id, self.config.get("audit_whitelist", [])):
@@ -1611,6 +1667,7 @@ class ImageGuard(Star):
                 "cache_data": cache_data_size,
             },
             "audit_config": self._audit_config_summary(),
+            "group_names": await self._group_name_map(),
             "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_records": total_records,
             "truncated": False,
@@ -1700,6 +1757,15 @@ class ImageGuard(Star):
 
         logger.warning("[ImageGuard] 找不到 reload 方法，配置已保存但需手动重载插件")
         return False
+
+    async def _api_audit_group_names(self) -> dict:
+        """返回「群 ID -> 群名」，供配置页与记录页把群号显示成可读名称。
+
+        数据来自 AstrBot 自己的 umo_aliases 表（高级路由页用的就是它）与插件
+        在运行中看到的群名；拿不到名字的群不会出现在这里，页面照常显示 ID。
+        """
+        names = await self._group_name_map()
+        return {"names": names, "count": len(names)}
 
     async def _api_audit_config_get(self) -> dict:
         """返回当前插件配置（API Key 已掩码，页面不需要明文）。"""

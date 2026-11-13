@@ -132,6 +132,7 @@
     cacheStats: {},
     storageSize: {},
     auditConfig: {},
+    groupNames: {},
     serverTime: '',
     totalRecords: 0,
     fullConfig: {},
@@ -216,6 +217,9 @@
     },
     list() {
       return api.get('audit/list');
+    },
+    groupNames() {
+      return api.get('audit/group-names');
     },
     pending() {
       return api.get('audit/pending');
@@ -540,7 +544,7 @@
       record.time || '',
       record.user_name || '',
       record.user_id || '',
-      record.group_id ? '群 ' + record.group_id : '私聊',
+      record.group_id ? '群 ' + ((state.groupNames || {})[record.group_id] || record.group_id) : '私聊',
       record.reason || '',
       (record.tags || []).join(' '),
       record.recalled ? '已撤回' : '撤回失败',

@@ -1,6 +1,6 @@
 # 🛡️ 图片内容审查卫士 (Image Guard Pro)
 
-> **版本**: v1.14.0
+> **版本**: v1.15.0
 > **作者**: mmyddd
 
 AstrBot 视觉审核插件。它用多模态大模型（Gemini、GPT-4o 等）对群聊/私聊图片做语义审查，不依赖关键词匹配。
@@ -222,6 +222,15 @@ unsloth 需要把 user 内容拆成 text / image 两个 block，官方 vision �
 | 禁言发送者 | ✅ 任意时长 | ⚠️ 最长 30 天，只能操作普通成员 |
 | 战报（文本 + 证据图） | ✅ | ✅ 先上传富媒体再发消息 |
 | 额外配置项 | — | `official_recall_within_window` |
+
+### 群名的来源
+
+作用域里存的是群 ID（OneBot 是群号，官方机器人是群 OpenID），但页面会尽量显示成群名，和 AstrBot「高级路由」页一致：
+
+1. **会话别名表**：AstrBot v4.29+ 的 `umo_aliases` 表，`auto_name` 由框架从入站消息自动记录，`user_alias` 来自 `/name` 命令。插件直接读这张表，等于复用高级路由页的解析结果。
+2. **运行期缓存**：每条群消息经过本插件时记录一次群名，名字没变不重复拉取。
+
+配置页「群聊」区块因此多了个下拉框，能直接从 AstrBot 见过的群里选，不必手抄 32 位 OpenID。旧版 AstrBot 没有这张表或没有接口时自动跳过，配置照常可用，只是只显示 ID。
 
 官方机器人的标识是 OpenID 而不是 QQ 号：`group_scope`、`private_scope`、`audit_whitelist`、`report_target_id` 在该平台都要填 OpenID（`group_scope` 填群 OpenID）。日志里那串长 ID 就是它。
 

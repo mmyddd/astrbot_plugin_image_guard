@@ -219,6 +219,7 @@
       state.runtimeStats = response.runtime_stats || {};
       if (Array.isArray(response.pending)) state.pending = response.pending;
       state.auditConfig = response.audit_config || {};
+      state.groupNames = response.group_names || state.groupNames || {};
       state.totalRecords = Number(response.total_records || state.records.length);
       state.serverTime = response.server_time || '';
       state.lastSyncAt = response.server_time || new Date().toISOString();
