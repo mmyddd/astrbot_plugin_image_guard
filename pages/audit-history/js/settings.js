@@ -538,6 +538,7 @@
     $('#cfg-skip_audit_for_banned').checked = truthy(config.skip_audit_for_banned);
     $('#cfg-ban_duration').value = valueOr(config.ban_duration, '');
     $('#cfg-report_target_id').value = config.report_target_id || '';
+    $('#cfg-report_blur_strength').value = valueOr(config.report_blur_strength, 95);
     $('#cfg-compressed_image_max_bytes').value = valueOr(config.compressed_image_max_bytes, '');
     $('#cfg-audit_history_max_records').value = valueOr(config.audit_history_max_records, '');
     $('#cfg-keep_compressed_image_in_temp').checked = truthy(config.keep_compressed_image_in_temp);
@@ -649,6 +650,7 @@
       skip_audit_for_banned: $('#cfg-skip_audit_for_banned').checked,
       ban_duration: intOr($('#cfg-ban_duration').value, 86400),
       report_target_id: $('#cfg-report_target_id').value.trim(),
+      report_blur_strength: intOr($('#cfg-report_blur_strength').value, 95),
       group_report_targets: reportTargets.map(item => ({
         source_group_id: String(item.source_group_id || '').trim(),
         target_type: item.target_type === 'group' ? 'group' : 'private',

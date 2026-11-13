@@ -10,7 +10,7 @@ from typing import Final
 
 import httpx
 from PIL import Image as PillowImage
-from PIL import ImageOps
+from PIL import ImageFilter, ImageOps
 
 
 JPEG_DATA_URL_PREFIX: Final = "data:image/jpeg;base64,"
@@ -283,6 +283,61 @@ def _save_compressed_image_to_temp(
         original_frames=compression_result.original_frames,
         compressed_frames=compression_result.compressed_frames,
     )
+
+
+def blur_image_for_report(
+    image_path: str | Path,
+    strength: int,
+    output_dir: Path | None = None,
+) -> str | None:
+    """把战报证据图做全图高斯模糊，返回临时文件路径（无法处理时返回 None）。
+
+    做法与 astrbot_plugin_image_censor 一致：按图片长边换算模糊半径，再对整张
+    图做一次高斯模糊，不做分区打码——战报只用于让管理员定位问题，不需要看清
+    细节，全图模糊反而更不容易漏掉角落里的违规内容。
+
+    「强度」是 0-100 的百分比，越大越糊，换算关系为
+    半径 = 长边 × strength / 100 × 0.05。参考点：strength≈15 的观感与
+    image_censor 默认配置（blur_scale=20）相当，默认的 95 约为其 6 倍。
+
+    半径随长边缩放，所以 800px 和 4000px 的图片糊到同一视觉程度，不会出现
+    「小图糊成色块、大图还看得清」的偏差。
+
+    动图（GIF）只取首帧：战报里没人会点播放，静态帧足够说明问题，也避免把
+    整段动图塞进上报通道。
+    """
+    strength = int(strength or 0)
+    if strength <= 0:
+        return None
+
+    raw_path = str(image_path or "").replace("file:///", "")
+    if not raw_path:
+        return None
+    source = Path(raw_path)
+    if not source.is_file():
+        return None
+
+    with PillowImage.open(source) as raw:
+        raw.seek(0)
+        frame = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
+
+    width, height = frame.size
+    longest = max(width, height)
+    if longest <= 1:
+        return None
+
+    radius = longest * min(strength, 100) / 100 * 0.05
+    # 半径上限取长边的四分之一：再大也只是把整图压成一块纯色，白白增加耗时
+    radius = max(1.0, min(radius, longest / 4))
+    blurred = frame.filter(ImageFilter.GaussianBlur(radius=radius))
+
+    target_dir = output_dir or _resolve_compressed_image_temp_dir(None)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    digest = blake2s(raw_path.encode("utf-8"), digest_size=4).hexdigest()
+    out_path = target_dir / f"report_blur_{timestamp}_{digest}.jpg"
+    blurred.save(out_path, format="JPEG", quality=92, optimize=True)
+    return str(out_path)
 
 
 def _resolve_compressed_image_temp_dir(compressed_image_temp_dir: Path | None) -> Path:

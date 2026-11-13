@@ -13,6 +13,7 @@ from PIL import Image as PillowImage
 from .cache import ImageAuditCache
 from .systemone_client import SystemOneGate
 from .image_processor import (
+    blur_image_for_report,
     compress_image_with_result,
     _format_compression_result,
     _save_compressed_image_to_temp,
@@ -214,6 +215,7 @@ _EDITABLE_BOOL_FIELDS = (
     "dataset_capture_raw_response",
 )
 _EDITABLE_INT_FIELDS = (
+    "report_blur_strength",
     "llm_max_tokens",
     "compressed_image_max_bytes",
     "ban_duration",
@@ -1186,6 +1188,25 @@ class ImageGuard(Star):
         except Exception as e:
             logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
 
+    def _report_image_ref(self, violation_img_url: str) -> str:
+        """战报用哪张图：默认是打了厚码的副本，失败时回退原图。
+
+        战报会发到管理员会话，等于把违规图片又传了一遍。打码能防止它被二次
+        转发出去，同时保留足够轮廓让管理员判断“这是不是同一张图”。
+        """
+        strength = int(self.config.get("report_blur_strength", 95) or 0)
+        if strength <= 0:
+            return violation_img_url
+        try:
+            blurred = blur_image_for_report(violation_img_url, strength)
+        except Exception as e:
+            logger.warning(f"[ImageGuard] 战报打码失败，回退原图: {e}")
+            return violation_img_url
+        if not blurred:
+            return violation_img_url
+        logger.info(f"[ImageGuard] 战报证据图已打码（强度 {min(strength, 100)}）: {blurred}")
+        return blurred
+
     @staticmethod
     def _build_report_text(
         is_group: bool,
@@ -1256,7 +1277,7 @@ class ImageGuard(Star):
                 )
                 message_payload = [
                     {"type": "text", "data": {"text": text_content}},
-                    {"type": "image", "data": {"file": violation_img_url}}
+                    {"type": "image", "data": {"file": self._report_image_ref(violation_img_url)}}
                 ]
 
                 if target_type == "group":
@@ -1336,7 +1357,9 @@ class ImageGuard(Star):
                 text_content = self._build_report_text(
                     is_group, group_id, user_name, user_id, reason, recalled, banned
                 )
-                image_b64 = official_api.official_image_base64(violation_img_url)
+                image_b64 = official_api.official_image_base64(
+                    self._report_image_ref(violation_img_url)
+                )
                 await official_api.send_report(
                     client,
                     text=text_content,
