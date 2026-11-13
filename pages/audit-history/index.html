@@ -417,6 +417,14 @@
                     <span>群聊中命中违规时撤回原消息，需要 Bot 具备管理员权限</span>
                   </span>
                 </label>
+                <label class="toggle" for="cfg-official_recall_within_window">
+                  <input type="checkbox" id="cfg-official_recall_within_window">
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">
+                    <strong>官方机器人：仅在 2 分钟内撤回</strong>
+                    <span>QQ 官方接口规定消息发出超过 2 分钟不可撤回，超时跳过撤回但照常禁言</span>
+                  </span>
+                </label>
                 <label class="toggle" for="cfg-skip_audit_for_banned">
                   <input type="checkbox" id="cfg-skip_audit_for_banned">
                   <span class="toggle-track" aria-hidden="true"></span>

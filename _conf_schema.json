@@ -168,9 +168,15 @@
     "default": 86400
   },
   "report_target_id": {
-    "description": "违规图片转发上报的目标ID（建议填 unified_msg_origin 格式，或纯数字 ID）。留空不转发。",
+    "description": "违规图片转发上报的目标ID。OneBot 平台填 QQ 号；QQ 官方机器人平台填用户 OpenID。留空不转发。",
     "type": "string",
     "default": ""
+  },
+  "official_recall_within_window": {
+    "description": "QQ 官方机器人平台：只在消息发出 2 分钟（官方撤回窗口）内执行撤回。官方接口对超时消息会直接报错，关闭此开关则无论多久都尝试撤回。",
+    "type": "bool",
+    "default": true,
+    "hint": "开启（推荐）= 超过 2 分钟跳过撤回，仍会禁言；关闭 = 始终尝试"
   },
   "group_report_targets": {
     "description": "群聊违规上报接收人映射列表。按来源群指定战报接收目标。未匹配任何规则时回退到 report_target_id。",

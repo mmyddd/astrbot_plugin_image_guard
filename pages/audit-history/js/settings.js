@@ -54,7 +54,7 @@
 
   const TEXTAREA_FIELDS = ['cfg-group_scope', 'cfg-private_scope'];
   const CHECKBOX_FIELDS = [
-    'cfg-enable_recall', 'cfg-keep_compressed_image_in_temp',
+    'cfg-enable_recall', 'cfg-official_recall_within_window', 'cfg-keep_compressed_image_in_temp',
     'cfg-debug_log_llm_response', 'cfg-audit_cache_enabled',
     'cfg-systemone_enabled',
     'cfg-dataset_capture_enabled', 'cfg-dataset_capture_raw_response'
@@ -530,6 +530,7 @@
     $('#prob-value').textContent = Math.round(prob * 100) + '%';
 
     $('#cfg-enable_recall').checked = truthy(config.enable_recall);
+    $('#cfg-official_recall_within_window').checked = config.official_recall_within_window !== false;
     $('#cfg-skip_audit_for_banned').checked = truthy(config.skip_audit_for_banned);
     $('#cfg-ban_duration').value = valueOr(config.ban_duration, '');
     $('#cfg-report_target_id').value = config.report_target_id || '';
@@ -640,6 +641,7 @@
       audit_whitelist: lines($('#cfg-audit_whitelist').value),
       check_probability: floatOr($('#cfg-check_probability').value, 1),
       enable_recall: $('#cfg-enable_recall').checked,
+      official_recall_within_window: $('#cfg-official_recall_within_window').checked,
       skip_audit_for_banned: $('#cfg-skip_audit_for_banned').checked,
       ban_duration: intOr($('#cfg-ban_duration').value, 86400),
       report_target_id: $('#cfg-report_target_id').value.trim(),

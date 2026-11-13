@@ -19,6 +19,12 @@ from .image_processor import (
     _resolve_compressed_image_temp_dir,
 )
 from .dataset_recorder import EXPORT_FORMATS, DatasetRecorder
+from . import qq_official_actions as official_api
+from .qq_official_actions import (
+    OFFICIAL_MUTE_MAX_SECONDS,
+    OFFICIAL_RECALL_WINDOW_SECONDS,
+    is_official_client,
+)
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -199,6 +205,7 @@ _EDITABLE_TEXT_FIELDS = (
 _EDITABLE_DICT_LIST_FIELDS = ("group_report_targets",)
 _EDITABLE_BOOL_FIELDS = (
     "enable_recall",
+    "official_recall_within_window",
     "audit_cache_enabled",
     "keep_compressed_image_in_temp",
     "debug_log_llm_response",
@@ -362,7 +369,7 @@ def _make_probe_image() -> bytes:
     return buffer.getvalue()
 
 
-@register("image_guard", "YEZI", "图片内容审查卫士", "1.13.0")
+@register("image_guard", "YEZI", "图片内容审查卫士", "1.14.0")
 class ImageGuard(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -1132,30 +1139,94 @@ class ImageGuard(Star):
         tags: list[str] | None = None,
         audit_ms: int | None = None,
     ):
-        """执行判罚 (依赖 OneBot 协议)"""
+        """执行判罚。
+
+        按平台分派：
+
+        - QQ 官方机器人（qq_official / qq_official_webhook，botpy 客户端）：
+          走 API v2 的 REST 路由，见 qq_official_actions。
+        - OneBot v11（aiocqhttp）：走 api.call_action，即原逻辑。
+        - 其他平台：没有管理接口，只落审核记录，不做动作。
+        """
         user_id = event.get_sender_id()
         group_id = event.get_group_id()
         user_name = event.get_sender_name()
-
-        recalled = False
-        banned = False
+        msg_id = str(getattr(event.message_obj, "message_id", "") or "")
         duration = int(self.config.get("ban_duration", 86400))
 
         client = None
         if hasattr(event, "bot"): client = event.bot
         elif hasattr(event, "client"): client = event.client
 
-        if not client: return
-        if not hasattr(client, "api") or not hasattr(client.api, "call_action"):
-            return
+        recalled = False
+        banned = False
+
+        if is_official_client(client):
+            recalled, banned = await self._enforce_qq_official(
+                client, event, violation_img_url, is_group, reason,
+                user_id, group_id, user_name, duration, msg_id,
+            )
+        elif client is not None and hasattr(client, "api") and hasattr(client.api, "call_action"):
+            recalled, banned = await self._enforce_onebot(
+                client, violation_img_url, is_group, reason,
+                user_id, group_id, user_name, duration, msg_id,
+            )
+        else:
+            logger.info(
+                f"[ImageGuard] 平台【{event.get_platform_name()}】没有可用的判罚接口，"
+                "本次只记录不处置"
+            )
+
+        # 无论判罚成败都要落库，否则官方平台下违规记录会整条丢失
+        try:
+            await self._save_audit_record(
+                event, violation_img_url, reason,
+                recalled, banned, duration, is_group, tags, audit_ms,
+            )
+        except Exception as e:
+            logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
+
+    @staticmethod
+    def _build_report_text(
+        is_group: bool,
+        group_id: str,
+        user_name: str,
+        user_id: str,
+        reason: str,
+        recalled: bool,
+        banned: bool,
+    ) -> str:
+        """拼装静默执法战报正文（两个平台共用）。"""
+        source_str = f"群 {group_id}" if is_group else "私聊"
+        status_str = f"撤回:{'✅' if recalled else '❌'} 禁言:{'✅' if banned else '❌'}"
+        return (
+            f"🕵️ [静默执法报告]\n"
+            f"来源: {source_str}\n"
+            f"用户: {user_name} ({user_id})\n"
+            f"理由: {reason}\n"
+            f"状态: {status_str}\n"
+            f"证据:"
+        )
+
+    async def _enforce_onebot(
+        self,
+        client,
+        violation_img_url: str,
+        is_group: bool,
+        reason: str,
+        user_id: str,
+        group_id: str,
+        user_name: str,
+        duration: int,
+        msg_id: str,
+    ):
+        """OneBot v11 判罚路径（行为与原实现一致）。"""
+        recalled = False
+        banned = False
 
         # A. 撤回消息
         if self.config.get("enable_recall", True) and is_group:
             try:
-                msg_id = None
-                if hasattr(event.message_obj, "message_id"):
-                    msg_id = event.message_obj.message_id
-
                 if msg_id:
                     await client.api.call_action('delete_msg', message_id=msg_id)
                     recalled = True
@@ -1175,23 +1246,14 @@ class ImageGuard(Star):
             except Exception as e:
                 logger.warning(f"[ImageGuard] Silent Ban failed: {e}")
 
-        # C. 上报证据 (私聊)
+        # C. 上报证据
         report_target = self._get_report_target(group_id, is_group)
         if report_target:
             try:
                 target_type, target_id = report_target
-                source_str = f"群 {group_id}" if is_group else "私聊"
-                status_str = f"撤回:{'✅' if recalled else '❌'} 禁言:{'✅' if banned else '❌'}"
-
-                text_content = (
-                    f"🕵️ [静默执法报告]\n"
-                    f"来源: {source_str}\n"
-                    f"用户: {user_name} ({user_id})\n"
-                    f"理由: {reason}\n"
-                    f"状态: {status_str}\n"
-                    f"证据:"
+                text_content = self._build_report_text(
+                    is_group, group_id, user_name, user_id, reason, recalled, banned
                 )
-
                 message_payload = [
                     {"type": "text", "data": {"text": text_content}},
                     {"type": "image", "data": {"file": violation_img_url}}
@@ -1213,16 +1275,97 @@ class ImageGuard(Star):
             except Exception as e:
                 logger.error(f"[ImageGuard] Report failed: {e}")
 
-        # D. 保存审核记录
-        try:
-            await self._save_audit_record(
-                event, violation_img_url, reason,
-                recalled, banned, duration, is_group, tags, audit_ms,
-            )
-        except Exception as e:
-            logger.error(f"[ImageGuard] 保存审核记录失败: {e}")
+        return recalled, banned
 
-    def _get_report_target(self, group_id: str | None, is_group: bool):
+    async def _enforce_qq_official(
+        self,
+        client,
+        event: AstrMessageEvent,
+        violation_img_url: str,
+        is_group: bool,
+        reason: str,
+        user_id: str,
+        group_id: str,
+        user_name: str,
+        duration: int,
+        msg_id: str,
+    ):
+        """QQ 官方机器人判罚路径：API v2 的撤回 / 禁言 / 发送。"""
+        recalled = False
+        banned = False
+
+        # A. 撤回：与 OneBot 路径保持一致，只在群聊里撤回；官方限制消息发出 2 分钟内
+        if self.config.get("enable_recall", True) and is_group:
+            if self.config.get("official_recall_within_window", True) and not self._official_message_fresh(event):
+                logger.info("[ImageGuard] 官方接口撤回窗口已过（消息超过 2 分钟），跳过撤回")
+            else:
+                try:
+                    recalled = await official_api.recall_message(
+                        client,
+                        message_id=msg_id,
+                        group_id=group_id if is_group else "",
+                        user_openid="" if is_group else user_id,
+                    )
+                    if not recalled:
+                        logger.warning("[ImageGuard] 官方接口撤回失败：缺少 message_id")
+                except Exception as e:
+                    logger.warning(f"[ImageGuard] 官方接口撤回失败: {e}")
+
+        # B. 禁言：官方只支持群聊，且单次上限 30 天
+        if duration > 0 and is_group:
+            clamped = min(int(duration), OFFICIAL_MUTE_MAX_SECONDS)
+            if clamped != int(duration):
+                logger.info(
+                    f"[ImageGuard] 官方禁言上限 30 天，配置的 {duration}s 按 {clamped}s 执行"
+                )
+            try:
+                banned = await official_api.mute_group_member(
+                    client,
+                    group_id=group_id,
+                    member_openid=user_id,
+                    duration_seconds=clamped,
+                )
+            except Exception as e:
+                logger.warning(f"[ImageGuard] 官方接口禁言失败: {e}")
+
+        # C. 战报：目标与来源不是同一会话，不能借用被动回复的 msg_id
+        report_target = self._get_report_target_str(group_id, is_group)
+        if report_target:
+            try:
+                target_type, target_id = report_target
+                text_content = self._build_report_text(
+                    is_group, group_id, user_name, user_id, reason, recalled, banned
+                )
+                image_b64 = official_api.official_image_base64(violation_img_url)
+                await official_api.send_report(
+                    client,
+                    text=text_content,
+                    image_base64=image_b64,
+                    group_id=target_id if target_type == "group" else "",
+                    openid="" if target_type == "group" else target_id,
+                )
+            except Exception as e:
+                logger.error(f"[ImageGuard] 官方接口战报发送失败: {e}")
+
+        return recalled, banned
+
+    @staticmethod
+    def _official_message_fresh(event: AstrMessageEvent) -> bool:
+        """事件时间戳距今是否还在官方 2 分钟撤回窗口内。"""
+        try:
+            ts = int(getattr(event.message_obj, "timestamp", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if ts <= 0:
+            return True
+        return (time.time() - ts) <= OFFICIAL_RECALL_WINDOW_SECONDS
+
+    def _get_report_target_str(self, group_id: str | None, is_group: bool):
+        """解析战报接收目标，返回 (type, id) 且 id 保持字符串。
+
+        QQ 官方平台的接收方是 OpenID 这类非数字标识，转 int 会把目标弄丢，
+        所以底层统一按字符串解析，OneBot 需要整数时再由 _get_report_target 转换。
+        """
         if is_group and group_id:
             for entry in self.config.get("group_report_targets", []):
                 # 兼容旧版字符串格式 "来源群号:type:id"
@@ -1231,45 +1374,43 @@ class ImageGuard(Star):
                     if not sep or group_text.strip() != str(group_id):
                         continue
                     target_kind, type_sep, target_id_text = target_text.partition(":")
-                    try:
-                        if type_sep:
-                            target_kind = target_kind.strip().lower()
-                            target_id = int(target_id_text.strip())
-                        else:
-                            target_kind = "private"
-                            target_id = int(target_text.strip())
-                    except (ValueError, TypeError) as exc:
-                        logger.warning(
-                            f"[ImageGuard] 战报目标解析失败 (旧格式): {entry}, {exc}"
-                        )
+                    if type_sep:
+                        target_kind = target_kind.strip().lower()
+                        target_id = target_id_text.strip()
+                    else:
+                        target_kind = "private"
+                        target_id = target_text.strip()
+                    if not target_id:
+                        logger.warning(f"[ImageGuard] 战报目标为空 (旧格式): {entry}")
                         continue
                     return target_kind, target_id
 
                 # 新版 template_list 格式
-                src_id = entry.get("source_group_id", "").strip()
+                src_id = str(entry.get("source_group_id", "")).strip()
                 if src_id == str(group_id):
-                    target_kind = entry.get("target_type", "private").strip().lower()
-                    raw_id = entry.get("target_id", "").strip()
+                    target_kind = str(entry.get("target_type", "private")).strip().lower()
+                    raw_id = str(entry.get("target_id", "")).strip()
                     if not raw_id:
                         continue
-                    try:
-                        return target_kind, int(raw_id)
-                    except (ValueError, TypeError) as exc:
-                        logger.warning(
-                            f"[ImageGuard] 战报目标解析失败 (新模板): {entry}, {exc}"
-                        )
-                        continue
+                    return target_kind, raw_id
 
-        report_target = self.config.get("report_target_id")
+        report_target = str(self.config.get("report_target_id") or "").strip()
         if report_target:
-            try:
-                return "private", int(str(report_target).strip())
-            except (ValueError, TypeError) as exc:
-                logger.warning(
-                    f"[ImageGuard] report_target_id 解析失败: {report_target}, {exc}"
-                )
+            return "private", report_target
 
         return None
+
+    def _get_report_target(self, group_id: str | None, is_group: bool):
+        """OneBot 版本：把接收目标转成整数 QQ 号，解析失败视为未配置。"""
+        target = self._get_report_target_str(group_id, is_group)
+        if not target:
+            return None
+        target_kind, raw_id = target
+        try:
+            return target_kind, int(raw_id)
+        except (ValueError, TypeError) as exc:
+            logger.warning(f"[ImageGuard] 战报目标不是数字 QQ 号: {raw_id}, {exc}")
+            return None
 
     # ── 审核历史 ────────────────────────────────────────────────
 
