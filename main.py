@@ -22,6 +22,7 @@ from .image_processor import (
 from .dataset_recorder import EXPORT_FORMATS, DatasetRecorder
 from . import qq_official_actions as official_api
 from .group_names import (
+    display_group_label,
     group_id_from_umo,
     group_name_from_event,
     load_alias_names,
@@ -1272,9 +1273,16 @@ class ImageGuard(Star):
         reason: str,
         recalled: bool,
         banned: bool,
+        group_names: dict[str, str] | None = None,
     ) -> str:
-        """拼装静默执法战报正文（两个平台共用）。"""
-        source_str = f"群 {group_id}" if is_group else "私聊"
+        """拼装静默执法战报正文（两个平台共用）。
+
+        来源写成「群名 (群号)」，管理员在战报里就能认出是哪个群，不用回配置页
+        对照 32 位 OpenID；查不到群名时退回纯 ID。
+        """
+        source_str = (
+            f"群 {display_group_label(group_id, group_names)}" if is_group else "私聊"
+        )
         status_str = f"撤回:{'✅' if recalled else '❌'} 禁言:{'✅' if banned else '❌'}"
         return (
             f"🕵️ [静默执法报告]\n"
@@ -1329,7 +1337,8 @@ class ImageGuard(Star):
             try:
                 target_type, target_id = report_target
                 text_content = self._build_report_text(
-                    is_group, group_id, user_name, user_id, reason, recalled, banned
+                    is_group, group_id, user_name, user_id, reason, recalled, banned,
+                    await self._group_name_map(),
                 )
                 message_payload = [
                     {"type": "text", "data": {"text": text_content}},
@@ -1411,7 +1420,8 @@ class ImageGuard(Star):
             try:
                 target_type, target_id = report_target
                 text_content = self._build_report_text(
-                    is_group, group_id, user_name, user_id, reason, recalled, banned
+                    is_group, group_id, user_name, user_id, reason, recalled, banned,
+                    await self._group_name_map(),
                 )
                 image_b64 = official_api.official_image_base64(
                     self._report_image_ref(violation_img_url)
