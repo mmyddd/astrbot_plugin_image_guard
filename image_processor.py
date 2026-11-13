@@ -298,7 +298,7 @@ def blur_image_for_report(
 
     「强度」是 0-100 的百分比，越大越糊，换算关系为
     半径 = 长边 × strength / 100 × 0.05。参考点：strength≈15 的观感与
-    image_censor 默认配置（blur_scale=20）相当，默认的 95 约为其 6 倍。
+    image_censor 默认配置（blur_scale=20）相当，默认的 50 约为其 3 倍。
 
     半径随长边缩放，所以 800px 和 4000px 的图片糊到同一视觉程度，不会出现
     「小图糊成色块、大图还看得清」的偏差。

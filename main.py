@@ -1194,7 +1194,7 @@ class ImageGuard(Star):
         战报会发到管理员会话，等于把违规图片又传了一遍。打码能防止它被二次
         转发出去，同时保留足够轮廓让管理员判断“这是不是同一张图”。
         """
-        strength = int(self.config.get("report_blur_strength", 95) or 0)
+        strength = int(self.config.get("report_blur_strength", 50) or 0)
         if strength <= 0:
             return violation_img_url
         try:

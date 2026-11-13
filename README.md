@@ -47,7 +47,7 @@ AstrBot 视觉审核插件。它用多模态大模型（Gemini、GPT-4o 等）�
 | **enable_recall** | 是否撤回群聊中的违规图片消息，需要 Bot 具备管理员权限。 | `true` |
 | **ban_duration** | 违规禁言时长（秒），0 表示不禁言。 | `86400` |
 | **report_target_id** | 违规战报默认接收人（管理员 QQ 或用户 OpenID），留空不转发。 | 你的 QQ 号 |
-| **report_blur_strength** | 战报证据图的模糊强度（0-100，越大越糊）。战报等于把违规图又传一遍，打码防止二次转发。0 = 发原图。 | `95` |
+| **report_blur_strength** | 战报证据图的模糊强度（0-100，越大越糊）。战报等于把违规图又传一遍，打码防止二次转发。0 = 发原图。 | `50` |
 | **group_report_targets** | 群上报映射：为指定来源群单独指定接收目标，支持 private / group；未命中时回退到 `report_target_id`。 | `908799265 → private:123456789` |
 | **audit_history_max_records** | 审核历史最大保留条数，超出删除最早记录，0 表示不保留。 | `500` |
 | **audit_cache_enabled** | 启用审核缓存：同一图片累计达到阈值后直接跳过。 | `true` |
